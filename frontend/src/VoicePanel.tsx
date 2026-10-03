@@ -5,6 +5,11 @@ import { API_URL } from "./config";
 
 type TranscriptRow = { role: string; text: string; t?: number; tag?: string };
 
+// Spoken answers: only speech within ANSWER_WINDOW_MS of a question counts, and phrases separated
+// by less than ANSWER_PAUSE_MS are joined into one answer. Anything said later is just chatter.
+const ANSWER_WINDOW_MS = 30_000;
+const ANSWER_PAUSE_MS = 2_500;
+
 export function VoicePanel(props: {
   mode: "expert" | "novice";
   sessionId: string | null;
@@ -43,22 +48,39 @@ export function VoicePanel(props: {
   const [lastSavedInsight, setLastSavedInsight] = useState<string | null>(null);
   const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
 
-  const lastForwardRef = useRef(0);
   const lastQuestionRef = useRef<string>("");
   const lastAdviceRef = useRef<string>("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechGenRef = useRef(0); // bumped to cancel speech that is still being fetched
   const wasActiveRef = useRef(sessionActive);
+  const questionAtRef = useRef(0);
+  const answerPartsRef = useRef<string[]>([]);
+  const answerTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // the ElevenLabs hook keeps the callbacks from when the voice session started, so read live values here
   const liveRef = useRef({ sessionId, simTime, mode, sessionActive, currentQuestion: "" });
 
   // ElevenLabs Conversational AI hook
   const conversation: any = useConversation({
+    // The agent is only used as a microphone + transcriber: its own replies are muted and hidden.
+    // Questions come from Claude (spoken via /elevenlabs/tts), answers go to /dialogue/answer.
+    volume: 0,
+    // @elevenlabs/react 0.4.5 forwards missing callbacks as undefined and the client calls them
+    // unguarded ("this.options.onConnect is not a function"), so provide every one explicitly.
+    onConnect: () => {},
+    onDisconnect: () => {},
+    onError: (err: unknown) => console.error("ElevenLabs agent error:", err),
+    onAudio: () => {},
+    onDebug: () => {},
+    onUnhandledClientToolCall: () => {},
     onMessage: async (m: any) => {
-      const role = m?.source === "user" ? "operator" : "elevenlabs_ai";
-      const text = m?.message ?? "";
-      if (!text) return;
+      const text = (m?.message ?? "").trim();
+      if (!text || m?.source !== "user") return; // ignore the agent's own (muted) replies
+      const role = "operator";
       const live = liveRef.current;
+      if (live.sessionActive && live.mode === "novice") {
+        askTutorRef.current(text); // spoken question to the tutor
+        return;
+      }
       const row = { role, text, t: live.simTime };
       setTranscript((prev) => [...prev.slice(-40), row]);
 
@@ -70,9 +92,17 @@ export function VoicePanel(props: {
         }).catch(() => {});
       }
 
-      // If in expert mode and operator spoke an answer, trigger knowledge distillation
-      if (live.sessionActive && live.mode === "expert" && role === "operator" && live.currentQuestion) {
-        submitAnswerRef.current(text);
+      // Expert mode: speech shortly after a question is its answer -> knowledge distillation
+      if (live.sessionActive && live.currentQuestion && Date.now() - questionAtRef.current < ANSWER_WINDOW_MS) {
+        answerPartsRef.current.push(text);
+        clearTimeout(answerTimerRef.current);
+        answerTimerRef.current = setTimeout(() => {
+          const answer = answerPartsRef.current.join(" ");
+          const question = liveRef.current.currentQuestion;
+          answerPartsRef.current = [];
+          liveRef.current.currentQuestion = ""; // one answer per question
+          if (question) submitAnswerRef.current(answer, question);
+        }, ANSWER_PAUSE_MS);
       }
     },
   });
@@ -94,16 +124,21 @@ export function VoicePanel(props: {
     }
 
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone API unavailable: open the app at http://localhost:5173 (not a network IP).");
+      }
       await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      console.error("Microphone access failed:", err);
+      alert(`Microphone access failed: ${(err as Error)?.message ?? err}`);
+      return;
+    }
+
+    try {
       await conversation.startSession({ agentId });
-      const rolePrompt =
-        mode === "expert"
-          ? "You are an apprentice AI learning from a senior drone pilot inspecting power lines. Ask concise questions when events occur."
-          : "You are an AI Flight Tutor coaching a novice drone pilot on power lines using knowledge.md rules. Give safety-first spoken advice.";
-      await conversation.sendContextualUpdate?.(rolePrompt);
     } catch (err) {
       console.error("Failed to start ElevenLabs session:", err);
-      alert("Could not access microphone or connect to ElevenLabs agent.");
+      alert(`Could not connect to the ElevenLabs agent: ${(err as Error)?.message ?? err}`);
     }
   };
 
@@ -155,20 +190,25 @@ export function VoicePanel(props: {
     }
   };
 
+  // A new question opens a fresh answer window
+  const openQuestion = (question: string) => {
+    clearTimeout(answerTimerRef.current);
+    answerPartsRef.current = [];
+    questionAtRef.current = Date.now();
+    setCurrentQuestion(question);
+  };
+
   // Synchronize incoming question from backend
   useEffect(() => {
     if (latestQuestion?.question && latestQuestion.question !== lastQuestionRef.current) {
       lastQuestionRef.current = latestQuestion.question;
       if (!sessionActive) return;
-      setCurrentQuestion(latestQuestion.question);
+      openQuestion(latestQuestion.question);
       setTranscript((prev) => [
         ...prev.slice(-40),
         { role: "apprentice_model", text: latestQuestion.question, t: latestQuestion.t, tag: "Question" },
       ]);
       speakText(latestQuestion.question);
-      if (conversation?.sendContextualUpdate && voiceConnected) {
-        conversation.sendContextualUpdate(`[AI QUESTION] ${latestQuestion.question}`);
-      }
     }
   }, [latestQuestion]);
 
@@ -187,32 +227,16 @@ export function VoicePanel(props: {
         },
       ]);
       speakText(latestAdvice.speech);
-      if (conversation?.sendContextualUpdate && voiceConnected) {
-        conversation.sendContextualUpdate(`[AI ADVICE] ${latestAdvice.speech}`);
-      }
     }
   }, [latestAdvice]);
-
-  // Push critical flight events to ElevenLabs conversation
-  useEffect(() => {
-    const ev = events[events.length - 1];
-    if (!ev || !sessionActive) return;
-    const now = Date.now();
-    if (now - lastForwardRef.current < 2500) return;
-    lastForwardRef.current = now;
-
-    if (conversation?.sendContextualUpdate && voiceConnected) {
-      conversation.sendContextualUpdate(
-        `[DRONE EVENT at t=${simTime.toFixed(1)}s] ${ev.type}`
-      );
-    }
-  }, [events, simTime, conversation, voiceConnected, sessionActive]);
 
   // End Flight stops everything: speech, the ElevenLabs voice session, pending questions
   useEffect(() => {
     if (wasActiveRef.current && !sessionActive) {
       stopSpeaking();
       conversation.endSession?.()?.catch?.(() => {});
+      clearTimeout(answerTimerRef.current);
+      answerPartsRef.current = [];
       setCurrentQuestion("");
       setTranscript((prev) => [
         ...prev.slice(-40),
@@ -238,7 +262,7 @@ export function VoicePanel(props: {
       }
       if (data.question && liveRef.current.sessionActive) {
         lastQuestionRef.current = data.question;
-        setCurrentQuestion(data.question);
+        openQuestion(data.question);
         setTranscript((prev) => [
           ...prev.slice(-40),
           { role: "apprentice_model", text: data.question, t: data.t, tag: "Question" },
@@ -251,9 +275,10 @@ export function VoicePanel(props: {
   };
 
   // Expert Mode: Submit Answer & update knowledge.md
-  const submitAnswer = async (textToSubmit?: string) => {
+  const submitAnswer = async (textToSubmit?: string, question?: string) => {
     const ans = textToSubmit || answerInput;
     if (!ans.trim()) return;
+    const answeredQuestion = question || currentQuestion;
 
     setIsSubmitting(true);
     try {
@@ -262,7 +287,7 @@ export function VoicePanel(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
-          question: currentQuestion || "General inspection insight",
+          question: answeredQuestion || "General inspection insight",
           answer: ans,
         }),
       });
@@ -270,6 +295,7 @@ export function VoicePanel(props: {
       if (data.ok) {
         setLastSavedInsight(data.insight);
         setAnswerInput("");
+        setCurrentQuestion((q) => (q === answeredQuestion ? "" : q)); // answered; wait for the next one
         setTranscript((prev) => [
           ...prev.slice(-40),
           { role: "expert_operator", text: ans, t: simTime, tag: "Answer" },
@@ -288,10 +314,10 @@ export function VoicePanel(props: {
   liveRef.current = { sessionId, simTime, mode, sessionActive, currentQuestion };
 
   // Novice Mode: Ask question to AI Tutor
-  const askTutor = async () => {
-    if (!noviceQueryInput.trim()) return;
-    const query = noviceQueryInput;
-    setNoviceQueryInput("");
+  const askTutor = async (spokenQuery?: string) => {
+    const query = (spokenQuery ?? noviceQueryInput).trim();
+    if (!query) return;
+    if (!spokenQuery) setNoviceQueryInput("");
     setTranscript((prev) => [
       ...prev.slice(-40),
       { role: "novice_operator", text: query, t: simTime, tag: "Question" },
@@ -315,6 +341,9 @@ export function VoicePanel(props: {
       console.error("Failed to ask tutor:", err);
     }
   };
+
+  const askTutorRef = useRef(askTutor);
+  askTutorRef.current = askTutor;
 
   return (
     <div className="voice-panel" style={hidden ? { display: "none" } : undefined}>
@@ -410,7 +439,7 @@ export function VoicePanel(props: {
               onChange={(e) => setNoviceQueryInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && askTutor()}
             />
-            <button className="btn-primary" onClick={askTutor} disabled={!noviceQueryInput.trim()}>
+            <button className="btn-primary" onClick={() => askTutor()} disabled={!noviceQueryInput.trim()}>
               Ask
             </button>
           </div>

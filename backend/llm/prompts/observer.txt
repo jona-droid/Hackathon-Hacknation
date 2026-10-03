@@ -23,6 +23,8 @@ t (s), x/y/z (m), speed (m/s), vz (vertical speed, m/s), acc (acceleration magni
 
 ## Don't ask when
 - The pilot is just cruising or repeating a routine move you already asked about.
+- The pilot is hovering or holding position more than about 10 m from every pylon, cable, insulator and the tree. That is a pause, not technique.
+- Your previous question was about the same kind of manoeuvre (for example two hover questions in a row).
 - The pilot is mid-manoeuvre within 2 m of a cable or the tree. Wait until they are clear, unless they have been holding steady there.
 - A question in the recent history already covers it. Ask a follow-up only if the new behaviour contradicts or extends the earlier answer.
 
