@@ -46,10 +46,14 @@ async def trigger_question() -> dict[str, Any]:
     """Operator pressed "Ask Question Now": the observer must ask about the recent flight."""
     if not runtime.observer.is_available:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the server.")
+    if not runtime.session_active:
+        raise HTTPException(status_code=409, detail="No flight in progress: press Start Flight first.")
     if runtime.observer_busy:
         raise HTTPException(status_code=409, detail="The observer is already thinking; try again in a moment.")
     payload = await observe_once(force=True)
     if payload is None:
+        if not runtime.session_active:
+            raise HTTPException(status_code=409, detail="The flight ended before the question was ready.")
         raise HTTPException(status_code=502, detail="The observer did not produce a question.")
     return payload
 

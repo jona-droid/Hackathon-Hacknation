@@ -12,6 +12,8 @@ export function VoicePanel(props: {
   latestQuestion: AIQuestion | null;
   latestAdvice: AIAdvice | null;
   latestObservation?: AIObservation | null;
+  sessionActive: boolean;
+  hidden?: boolean;
   onKnowledgeUpdated?: () => void;
 }) {
   const {
@@ -22,6 +24,8 @@ export function VoicePanel(props: {
     latestQuestion,
     latestAdvice,
     latestObservation,
+    sessionActive,
+    hidden,
     onKnowledgeUpdated,
   } = props;
 
@@ -31,7 +35,6 @@ export function VoicePanel(props: {
       : import.meta.env.VITE_ELEVENLABS_AGENT_ID;
 
   const [transcript, setTranscript] = useState<TranscriptRow[]>([]);
-  const [elevenStatus, setElevenStatus] = useState<string>("disconnected");
   const [currentQuestion, setCurrentQuestion] = useState<string>("");
   const [answerInput, setAnswerInput] = useState<string>("");
   const [noviceQueryInput, setNoviceQueryInput] = useState<string>("");
@@ -42,6 +45,11 @@ export function VoicePanel(props: {
   const lastForwardRef = useRef(0);
   const lastQuestionRef = useRef<string>("");
   const lastAdviceRef = useRef<string>("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speechGenRef = useRef(0); // bumped to cancel speech that is still being fetched
+  const wasActiveRef = useRef(sessionActive);
+  // the ElevenLabs hook keeps the callbacks from when the voice session started, so read live values here
+  const liveRef = useRef({ sessionId, simTime, mode, sessionActive, currentQuestion: "" });
 
   // ElevenLabs Conversational AI hook
   const conversation: any = useConversation({
@@ -49,30 +57,31 @@ export function VoicePanel(props: {
       const role = m?.source === "user" ? "operator" : "elevenlabs_ai";
       const text = m?.message ?? "";
       if (!text) return;
-      const row = { role, text, t: simTime };
+      const live = liveRef.current;
+      const row = { role, text, t: live.simTime };
       setTranscript((prev) => [...prev.slice(-40), row]);
 
-      if (sessionId) {
-        await fetch(`http://localhost:8000/session/${sessionId}/transcript`, {
+      if (live.sessionId) {
+        await fetch(`http://localhost:8000/session/${live.sessionId}/transcript`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role, text, t: simTime }),
+          body: JSON.stringify({ role, text, t: live.simTime }),
         }).catch(() => {});
       }
 
       // If in expert mode and operator spoke an answer, trigger knowledge distillation
-      if (mode === "expert" && role === "operator" && currentQuestion) {
-        submitAnswer(text);
+      if (live.sessionActive && live.mode === "expert" && role === "operator" && live.currentQuestion) {
+        submitAnswerRef.current(text);
       }
     },
-    onStatusChange: (s: string) => setElevenStatus(s),
   });
+  const voiceStatus: string = conversation.status ?? "disconnected";
+  const voiceConnected = voiceStatus === "connected";
 
   // Start ElevenLabs Conversational Session
   const toggleVoiceSession = async () => {
-    if (elevenStatus === "connected") {
-      conversation.endSession?.();
-      setElevenStatus("disconnected");
+    if (voiceConnected || voiceStatus === "connecting") {
+      await conversation.endSession?.();
       return;
     }
 
@@ -98,8 +107,18 @@ export function VoicePanel(props: {
   };
 
   // Play audio via ElevenLabs TTS or browser fallback
+  const stopSpeaking = () => {
+    speechGenRef.current += 1;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    setAudioPlaying(false);
+  };
+
   const speakText = async (text: string) => {
     if (!text) return;
+    stopSpeaking(); // never talk over the previous clip
+    const gen = speechGenRef.current;
     setAudioPlaying(true);
     try {
       const res = await fetch("http://localhost:8000/elevenlabs/tts", {
@@ -107,10 +126,13 @@ export function VoicePanel(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
+      if (gen !== speechGenRef.current) return; // stopped or replaced while fetching
       if (res.ok) {
         const blob = await res.blob();
+        if (gen !== speechGenRef.current) return;
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        audioRef.current = audio;
         audio.onended = () => setAudioPlaying(false);
         audio.onerror = () => setAudioPlaying(false);
         await audio.play();
@@ -119,6 +141,7 @@ export function VoicePanel(props: {
     } catch {
       // Fallback to browser SpeechSynthesis
     }
+    if (gen !== speechGenRef.current) return;
 
     if ("speechSynthesis" in window) {
       const utterance = new SpeechSynthesisUtterance(text);
@@ -135,13 +158,14 @@ export function VoicePanel(props: {
   useEffect(() => {
     if (latestQuestion?.question && latestQuestion.question !== lastQuestionRef.current) {
       lastQuestionRef.current = latestQuestion.question;
+      if (!sessionActive) return;
       setCurrentQuestion(latestQuestion.question);
       setTranscript((prev) => [
         ...prev.slice(-40),
         { role: "apprentice_model", text: latestQuestion.question, t: latestQuestion.t, tag: "Question" },
       ]);
       speakText(latestQuestion.question);
-      if (conversation?.sendContextualUpdate && elevenStatus === "connected") {
+      if (conversation?.sendContextualUpdate && voiceConnected) {
         conversation.sendContextualUpdate(`[AI QUESTION] ${latestQuestion.question}`);
       }
     }
@@ -151,6 +175,7 @@ export function VoicePanel(props: {
   useEffect(() => {
     if (latestAdvice?.speech && latestAdvice.speech !== lastAdviceRef.current) {
       lastAdviceRef.current = latestAdvice.speech;
+      if (!sessionActive) return;
       setTranscript((prev) => [
         ...prev.slice(-40),
         {
@@ -161,7 +186,7 @@ export function VoicePanel(props: {
         },
       ]);
       speakText(latestAdvice.speech);
-      if (conversation?.sendContextualUpdate && elevenStatus === "connected") {
+      if (conversation?.sendContextualUpdate && voiceConnected) {
         conversation.sendContextualUpdate(`[AI ADVICE] ${latestAdvice.speech}`);
       }
     }
@@ -170,20 +195,35 @@ export function VoicePanel(props: {
   // Push critical flight events to ElevenLabs conversation
   useEffect(() => {
     const ev = events[events.length - 1];
-    if (!ev) return;
+    if (!ev || !sessionActive) return;
     const now = Date.now();
     if (now - lastForwardRef.current < 2500) return;
     lastForwardRef.current = now;
 
-    if (conversation?.sendContextualUpdate && elevenStatus === "connected") {
+    if (conversation?.sendContextualUpdate && voiceConnected) {
       conversation.sendContextualUpdate(
         `[DRONE EVENT at t=${simTime.toFixed(1)}s] ${ev.type}`
       );
     }
-  }, [events, simTime, conversation, elevenStatus]);
+  }, [events, simTime, conversation, voiceConnected, sessionActive]);
+
+  // End Flight stops everything: speech, the ElevenLabs voice session, pending questions
+  useEffect(() => {
+    if (wasActiveRef.current && !sessionActive) {
+      stopSpeaking();
+      conversation.endSession?.()?.catch?.(() => {});
+      setCurrentQuestion("");
+      setTranscript((prev) => [
+        ...prev.slice(-40),
+        { role: "system", text: "Flight ended. The apprentice has stopped asking questions.", t: simTime },
+      ]);
+    }
+    wasActiveRef.current = sessionActive;
+  }, [sessionActive]);
 
   // Expert Mode: Trigger manual question from AI
   const triggerQuestion = async () => {
+    if (!sessionActive) return;
     try {
       const res = await fetch("http://localhost:8000/dialogue/trigger-question", {
         method: "POST",
@@ -195,7 +235,7 @@ export function VoicePanel(props: {
         alert(data.detail ?? "Could not get a question from the apprentice.");
         return;
       }
-      if (data.question) {
+      if (data.question && liveRef.current.sessionActive) {
         lastQuestionRef.current = data.question;
         setCurrentQuestion(data.question);
         setTranscript((prev) => [
@@ -242,6 +282,10 @@ export function VoicePanel(props: {
     }
   };
 
+  const submitAnswerRef = useRef(submitAnswer);
+  submitAnswerRef.current = submitAnswer;
+  liveRef.current = { sessionId, simTime, mode, sessionActive, currentQuestion };
+
   // Novice Mode: Ask question to AI Tutor
   const askTutor = async () => {
     if (!noviceQueryInput.trim()) return;
@@ -272,19 +316,19 @@ export function VoicePanel(props: {
   };
 
   return (
-    <div className="voice-panel">
+    <div className="voice-panel" style={hidden ? { display: "none" } : undefined}>
       {/* ElevenLabs Status Header */}
       <div className="voice-header">
         <div className="voice-status">
-          <span className={`status-dot ${elevenStatus}`} />
-          <strong>ElevenLabs Voice:</strong> {elevenStatus}
+          <span className={`status-dot ${voiceStatus}`} />
+          <strong>ElevenLabs Voice:</strong> {voiceStatus}
           {audioPlaying && <span className="audio-badge">🔊 Speaking</span>}
         </div>
         <button
-          className={`btn-voice ${elevenStatus === "connected" ? "connected" : ""}`}
+          className={`btn-voice ${voiceConnected ? "connected" : ""}`}
           onClick={toggleVoiceSession}
         >
-          {elevenStatus === "connected" ? "End Voice Chat" : "Connect Voice (ElevenLabs)"}
+          {voiceConnected ? "End Voice Chat" : "Connect Voice (ElevenLabs)"}
         </button>
       </div>
 
@@ -293,7 +337,7 @@ export function VoicePanel(props: {
         <div className="interaction-box expert">
           <div className="section-title">
             <span>🎓 AI Apprentice Learner</span>
-            <button className="btn-sm" onClick={triggerQuestion}>
+            <button className="btn-sm" onClick={triggerQuestion} disabled={!sessionActive}>
               Ask Question Now
             </button>
           </div>

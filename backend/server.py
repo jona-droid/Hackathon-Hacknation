@@ -46,6 +46,7 @@ async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) ->
     now = time.time()
     if ev.get("type") in ADVICE_TRIGGER_EVENTS and (now - runtime.last_advice_time > 6.0):
         runtime.last_advice_time = now
+        epoch = runtime.session_epoch
         try:
             frame = runtime.camera.get_latest_frame()
             advice_res = await asyncio.to_thread(
@@ -54,6 +55,8 @@ async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) ->
                 image_b64=frame,
                 event=ev,
             )
+            if runtime.session_epoch != epoch or not runtime.session_active:
+                return  # flight ended while the tutor was thinking
             runtime.latest_advice = advice_res
             await broadcast({"type": "advice", **advice_res})
             if runtime.recorder:
@@ -90,7 +93,7 @@ async def sim_loop() -> None:
                     runtime.recorder.record_event(ev)
 
                 # Expert questions come from the periodic observer (backend/api/observer.py)
-                if runtime.mode in {"novice", "tutor"}:
+                if runtime.session_active and runtime.mode in {"novice", "tutor"}:
                     asyncio.create_task(_handle_novice_event(ev, state))
 
             if runtime.recorder:
@@ -98,7 +101,7 @@ async def sim_loop() -> None:
 
             now = time.perf_counter()
             if now - last_broadcast >= broadcast_interval:
-                await broadcast({"type": "state", **state})
+                await broadcast({"type": "state", **state, "session_active": runtime.session_active})
                 last_broadcast = now
 
             await asyncio.sleep(dt)

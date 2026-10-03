@@ -42,12 +42,14 @@ async def session_start(payload: StartSessionRequest) -> dict[str, Any]:
 
 @router.post("/session/stop")
 async def session_stop() -> dict[str, Any]:
-    if not runtime.recorder:
+    # End the session first so the observer and tutor stop before the (slow) summary call
+    recorder = runtime.end_session()
+    if recorder is None:
         raise HTTPException(status_code=400, detail="No active session to stop")
 
-    sid = runtime.recorder.session_id
-    mode = runtime.recorder.mode
-    runtime.recorder.stop()
+    sid = recorder.session_id
+    mode = recorder.mode
+    recorder.stop()
 
     # Generate flight summary
     try:
@@ -55,7 +57,6 @@ async def session_stop() -> dict[str, Any]:
     except Exception as e:
         summary = {"session_id": sid, "error": str(e)}
 
-    runtime.recorder = None
     return {
         "session_id": sid,
         "mode": mode,

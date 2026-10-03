@@ -44,12 +44,27 @@ class SimRuntime:
     # observer questions: [{"t", "question", "answer" (None until answered)}]
     qa_history: list[dict[str, Any]] = field(default_factory=list)
     observer_busy: bool = False
+    # bumped on every session start/stop; LLM results from an older epoch are discarded
+    session_epoch: int = 0
 
     def __post_init__(self) -> None:
         self.drone = DroneSim(self.scene)
         self.detector = EventDetector(self.scene)
 
+    @property
+    def session_active(self) -> bool:
+        return self.recorder is not None
+
+    def end_session(self) -> SessionRecorder | None:
+        """Stop all AI activity immediately; in-flight LLM results will be discarded."""
+        recorder, self.recorder = self.recorder, None
+        self.session_epoch += 1
+        self.latest_question = None
+        self.latest_advice = None
+        return recorder
+
     def reset(self, mode: str = "expert") -> None:
+        self.session_epoch += 1
         self.mode = mode
         self.keys_down.clear()
         self.drone.reset()

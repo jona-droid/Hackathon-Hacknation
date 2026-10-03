@@ -23,6 +23,8 @@
 - **Sensor Glare**: If morning sun creates blinding reflections off conductors, yaw +30° to maintain oblique visual contrast against the ground.
 
 ## 4. Operator Insights Log
+- *[t=60.1s]* **Maneuver Insight**: sfsd
+- *[t=31.0s]* **Maneuver Insight**: inspecting the quality of the air
 - *[t=112.9s]* **Maneuver Insight**: I was going around the cable to see if it was fine on the other side too !
 - *[t=70.0s]* **Maneuver Insight**: Because the road was there and IM not allowed to cross the road
 - *[t=46.2s]* **Maneuver Insight**: I was checking the cable for analysis of the state of it. To make sure it wasn't broken!

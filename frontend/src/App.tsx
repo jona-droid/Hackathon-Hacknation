@@ -84,6 +84,7 @@ export function App() {
   const stopSession = async () => {
     try {
       const res = await fetch("http://localhost:8000/session/stop", { method: "POST" });
+      if (!res.ok) return;
       const body = await res.json();
       setSessionId(body.session_id);
       setTab("comparison"); // Switch to comparison/summary tab upon completion
@@ -130,6 +131,8 @@ export function App() {
     };
   }, []);
 
+  // the backend is the source of truth: true from Start Flight until End Flight
+  const sessionActive = !!state?.session_active;
   const pos = state?.pos ?? [-10, -10, 0];
   const yaw = state?.yaw ?? state?.rpy?.[2] ?? 0;
 
@@ -153,7 +156,7 @@ export function App() {
           <button className="btn-start" onClick={startSession}>
             ▶ Start Flight
           </button>
-          <button className="btn-stop" onClick={stopSession} disabled={!sessionId}>
+          <button className="btn-stop" onClick={stopSession} disabled={!sessionActive}>
             ⏹ End Flight
           </button>
         </div>
@@ -200,18 +203,19 @@ export function App() {
           </div>
 
           <div className="tab-content">
-            {tab === "voice" && (
-              <VoicePanel
-                mode={mode}
-                sessionId={sessionId}
-                simTime={state?.t ?? 0}
-                events={events as any}
-                latestQuestion={latestQuestion}
-                latestAdvice={latestAdvice}
-                latestObservation={latestObservation}
-                onKnowledgeUpdated={() => setKbRefreshKey((k) => k + 1)}
-              />
-            )}
+            {/* always mounted so End Flight can stop its audio/voice session even from another tab */}
+            <VoicePanel
+              mode={mode}
+              sessionId={sessionId}
+              simTime={state?.t ?? 0}
+              events={events as any}
+              latestQuestion={latestQuestion}
+              latestAdvice={latestAdvice}
+              latestObservation={latestObservation}
+              sessionActive={sessionActive}
+              hidden={tab !== "voice"}
+              onKnowledgeUpdated={() => setKbRefreshKey((k) => k + 1)}
+            />
 
             {tab === "knowledge" && <KnowledgeViewer refreshKey={kbRefreshKey} />}
 

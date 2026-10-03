@@ -26,7 +26,7 @@ def _awaiting_answer(t: float) -> bool:
 def _should_observe(t: float) -> bool:
     return (
         runtime.mode == "expert"
-        and runtime.recorder is not None
+        and runtime.session_active
         and runtime.observer.is_available
         and not runtime.observer_busy
         and runtime.drone.altitude > 0.4
@@ -38,12 +38,17 @@ def _should_observe(t: float) -> bool:
 
 async def observe_once(force: bool = False) -> dict[str, Any] | None:
     """Ask the observer about the recent flight; returns the question payload if one was asked."""
+    epoch = runtime.session_epoch
     runtime.observer_busy = True
     try:
         flight = runtime.flight_log.observer_context(OBSERVER_WINDOW_S)
         decision = await runtime.observer.decide(flight, runtime.qa_history, force=force)
     finally:
         runtime.observer_busy = False
+
+    if runtime.session_epoch != epoch or not runtime.session_active:
+        logger.info("observer: flight ended during the call, result discarded")
+        return None
 
     telemetry = runtime.drone.snapshot()
     t = telemetry["t"]

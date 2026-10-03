@@ -18,6 +18,7 @@ export type SimState = {
   mode: string;
   inspected_count: number;
   violations?: Array<{ text: string }>;
+  session_active?: boolean;
 };
 
 export type AIQuestion = {
