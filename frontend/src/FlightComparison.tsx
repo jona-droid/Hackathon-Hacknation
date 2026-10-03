@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "./config";
 
 type SessionMeta = { session_id: string; mode: string; has_summary?: boolean };
 
@@ -43,7 +44,7 @@ export function FlightComparison(props: {
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch("http://localhost:8000/sessions");
+      const res = await fetch(`${API_URL}/sessions`);
       const data = await res.json();
       const list: SessionMeta[] = data.sessions || [];
       setSessions(list);
@@ -61,7 +62,7 @@ export function FlightComparison(props: {
   const fetchCurrentSummary = async () => {
     if (!currentSessionId) return;
     try {
-      const res = await fetch(`http://localhost:8000/session/${currentSessionId}/summary`);
+      const res = await fetch(`${API_URL}/session/${currentSessionId}/summary`);
       if (res.ok) {
         const data = await res.json();
         setCurrentSummary(data.summary);
@@ -83,7 +84,7 @@ export function FlightComparison(props: {
     }
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/session/compare", {
+      const res = await fetch(`${API_URL}/session/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
