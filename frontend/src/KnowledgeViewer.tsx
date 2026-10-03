@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "./config";
 
 export function KnowledgeViewer(props: { refreshKey?: number }) {
   const { refreshKey } = props;
@@ -11,7 +12,7 @@ export function KnowledgeViewer(props: { refreshKey?: number }) {
   const fetchKnowledge = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/knowledge");
+      const res = await fetch(`${API_URL}/knowledge`);
       const data = await res.json();
       setContent(data.content || "");
       setEditText(data.content || "");
@@ -28,7 +29,7 @@ export function KnowledgeViewer(props: { refreshKey?: number }) {
 
   const handleSave = async () => {
     try {
-      const res = await fetch("http://localhost:8000/knowledge", {
+      const res = await fetch(`${API_URL}/knowledge`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: editText }),

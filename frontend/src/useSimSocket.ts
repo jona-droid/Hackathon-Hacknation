@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WS_URL } from "./config";
 
 export type SimEvent = { type: string; [k: string]: unknown };
 
@@ -50,7 +51,7 @@ export function useSimSocket() {
     let reconnectTimeout: ReturnType<typeof setTimeout>;
 
     function connect() {
-      ws = new WebSocket("ws://localhost:8000/ws");
+      ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onmessage = (msg) => {

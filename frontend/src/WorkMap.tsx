@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { API_URL } from "./config";
 
 type WorkMapData = {
   work_map: { title: string; steps: Array<{ id: number; t_start: number; action: string; decision: string; reason: string | null; exceptions: string | null; confidence: string }> };
@@ -18,14 +19,14 @@ export function WorkMap(props: { sessionId: string | null; onReplay: (t: number)
 
   const generate = async () => {
     if (!sessionId) return;
-    const res = await fetch(`http://localhost:8000/session/${sessionId}/workmap`, { method: "POST" });
+    const res = await fetch(`${API_URL}/session/${sessionId}/workmap`, { method: "POST" });
     const body = await res.json();
     setData(body);
   };
 
   const saveGuardrails = async () => {
     const guardrails = JSON.parse(guardrailText);
-    await fetch("http://localhost:8000/guardrails", {
+    await fetch(`${API_URL}/guardrails`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ guardrails }),
