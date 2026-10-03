@@ -9,10 +9,10 @@ import numpy as np
 from backend.sim.scene import Scene, inside_tree, nearest_cable_point
 
 START_POS = np.array([-10.0, -10.0, 0.05], dtype=float)
-FORWARD_SPEED = 4.0
-STRAFE_SPEED = 3.0
+FORWARD_SPEED = 13.0
+STRAFE_SPEED = 10.0
 YAW_RATE = 1.2
-CLIMB_RATE = 2.0
+CLIMB_RATE = 8.0
 MAX_ALTITUDE = 60.0
 
 

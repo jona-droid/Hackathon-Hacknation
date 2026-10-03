@@ -23,6 +23,7 @@
 - **Sensor Glare**: If morning sun creates blinding reflections off conductors, yaw +30° to maintain oblique visual contrast against the ground.
 
 ## 4. Operator Insights Log
+- *[t=41.2s]* **Maneuver Insight**: ejfpisjdfgpd
 - *[t=0.0s]* **Maneuver Insight**: I observed corrosion on the ceramic disk, so I stayed 2.2m away to avoid sparking.
 - *[t=0.0s]* **Pylon 2 Hover Insight**: I noticed intense wind drafts between towers so I lowered speed to 0.4m/s to stabilize.
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
