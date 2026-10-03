@@ -147,7 +147,7 @@ async def elevenlabs_text_to_speech(payload: TTSRequest) -> Response:
 
     data = json.dumps({
         "text": payload.text,
-        "model_id": "eleven_monolingual_v1",
+        "model_id": "eleven_flash_v2_5",  # low-latency; the v1 models were retired
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.8,
