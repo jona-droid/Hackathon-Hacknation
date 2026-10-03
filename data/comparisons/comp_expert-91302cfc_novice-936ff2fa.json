@@ -1,0 +1,34 @@
+{
+  "expert_session_id": "expert-91302cfc",
+  "novice_session_id": "novice-936ff2fa",
+  "overall_score": 88.0,
+  "coverage_comparison": {
+    "expert_inspected_count": 2,
+    "novice_inspected_count": 1,
+    "missed_targets": [
+      "i2"
+    ],
+    "commentary": "Novice inspected 1 of 2 targets covered by the expert. Missed components: i2."
+  },
+  "safety_compliance": {
+    "min_cable_distance_expert": 27.78,
+    "min_cable_distance_novice": 27.78,
+    "violations_novice": 0,
+    "compliance_rating": "Excellent",
+    "commentary": "Novice maintained a minimum clearance of 27.78m compared to 27.78m by the expert. 0 clearance alerts were triggered."
+  },
+  "technique_and_stability": {
+    "flight_duration_ratio": 0.0,
+    "hover_discipline": "Novice exhibited disciplined hover stability during inspection sequences.",
+    "knowledge_adherence": "Novice respected corridor altitude guidelines and slowed down near pylon arms as learned from the expert."
+  },
+  "key_strengths": [
+    "Good corridor tracking along the catenary curve.",
+    "Appropriate vertical climb before crossing roadway."
+  ],
+  "areas_for_improvement": [
+    "Maintain wider standoff margin (>2.5m) during transition between towers.",
+    "Avoid abrupt deceleration when approaching insulator brackets."
+  ],
+  "instructor_verdict": "The apprentice completed the mission with an overall performance score of 88.0/100. Safety compliance is rated Excellent. Ready for supervised field trials once clearance margins are consistently maintained."
+}

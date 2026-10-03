@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-numpy
+numpy>=2.2.0
 PyFlyt
 anthropic
 python-dotenv

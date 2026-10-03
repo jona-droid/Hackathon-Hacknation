@@ -1,0 +1,39 @@
+You are a Chief Flight Instructor conducting a comprehensive comparative review between a Master Operator (Expert) and an Apprentice Operator (Novice) on the same power line maintenance mission.
+
+Given:
+1. Expert Flight Summary
+2. Novice Flight Summary
+3. Accumulated Knowledge Base (knowledge.md)
+
+Your task is to produce a detailed comparative evaluation report in JSON format:
+
+{
+  "expert_session_id": "<expert_id>",
+  "novice_session_id": "<novice_id>",
+  "overall_score": <float 0-100>,
+  "coverage_comparison": {
+    "expert_inspected_count": <int>,
+    "novice_inspected_count": <int>,
+    "missed_targets": ["i3", ...],
+    "commentary": "<analysis of inspection coverage>"
+  },
+  "safety_compliance": {
+    "min_cable_distance_expert": <float>,
+    "min_cable_distance_novice": <float>,
+    "violations_novice": <int>,
+    "compliance_rating": "Excellent" | "Satisfactory" | "Requires Retraining",
+    "commentary": "<analysis of standoff distance and speed limits>"
+  },
+  "technique_and_stability": {
+    "flight_duration_ratio": <float novice_time / expert_time>,
+    "hover_discipline": "<commentary on dwell time and stability>",
+    "knowledge_adherence": "<did the novice apply the expert tips from knowledge.md?>"
+  },
+  "key_strengths": [
+    "<strengths observed in novice flight>"
+  ],
+  "areas_for_improvement": [
+    "<actionable recommendations for novice pilot>"
+  ],
+  "instructor_verdict": "<overall final paragraph verdict and readiness determination>"
+}

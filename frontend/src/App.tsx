@@ -1,75 +1,107 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { FlightComparison } from "./FlightComparison";
 import { Hud } from "./Hud";
+import { KnowledgeViewer } from "./KnowledgeViewer";
 import { MiniMap } from "./MiniMap";
 import { Scene3D, SceneData } from "./Scene3D";
 import { VoicePanel } from "./VoicePanel";
-import { WorkMap } from "./WorkMap";
 import { useSimSocket } from "./useSimSocket";
 
 export function App() {
+  const [mode, setMode] = useState<"expert" | "novice">("expert");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [scene, setScene] = useState<SceneData | null>(null);
   const [keysDown, setKeysDown] = useState<Set<string>>(new Set());
   const [inspected, setInspected] = useState<Set<string>>(new Set());
   const [warning, setWarning] = useState<string | null>(null);
-  const [tab, setTab] = useState<"voice" | "workmap" | "guardrails">("voice");
-  const [guardrails, setGuardrails] = useState<Array<Record<string, unknown>>>([]);
-  const [expertQuestions, setExpertQuestions] = useState<string[]>([]);
+  const [tab, setTab] = useState<"voice" | "knowledge" | "comparison">("voice");
+  const [kbRefreshKey, setKbRefreshKey] = useState<number>(0);
 
-  const { state, events, sendKeys } = useSimSocket();
+  const { state, events, latestQuestion, latestAdvice, sendKeys, sendFrame } = useSimSocket();
+  const lastFrameSendTime = useRef<number>(0);
 
+  // Load 3D scene data
   useEffect(() => {
     fetch("http://localhost:8000/scene")
       .then((r) => r.json())
       .then(setScene)
       .catch((error) => console.warn("Backend unavailable: scene could not be loaded.", error));
-    fetch("http://localhost:8000/guardrails")
-      .then((r) => r.json())
-      .then((d) => setGuardrails(d.guardrails ?? []))
-      .catch((error) => console.warn("Backend unavailable: guardrails could not be loaded.", error));
-    fetch("http://localhost:8000/expert/questions")
-      .then((r) => r.json())
-      .then((d) => setExpertQuestions(d.questions ?? []))
-      .catch((error) => console.warn("Backend unavailable: expert questions could not be loaded.", error));
   }, []);
 
+  // Track events for insulator inspections and alerts
   useEffect(() => {
     const e = events[events.length - 1];
     if (!e) return;
     if (e.type === "insulator_inspected" && e.insulator_id) {
       setInspected((prev) => new Set([...prev, String(e.insulator_id)]));
     }
-    if (e.type === "warning") setWarning(String(e.text ?? "Predicted violation"));
+    if (e.type === "very_close_cable") {
+      setWarning(`Proximity Alert: ${e.cable_dist ?? 1.5}m from conductor!`);
+    } else if (e.type === "collision") {
+      setWarning("COLLISION! Motors stopped.");
+    }
   }, [events]);
 
+  // Periodic visual camera frame capture from 3D Canvas
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      if (now - lastFrameSendTime.current < 2000) return;
+      lastFrameSendTime.current = now;
+
+      const canvas = document.querySelector("canvas");
+      if (canvas && state) {
+        try {
+          const frame_b64 = canvas.toDataURL("image/jpeg", 0.5);
+          sendFrame(frame_b64, state.t);
+        } catch {
+          // Canvas may be tainted or rendering
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [state, sendFrame]);
+
+  // Session Start
   const startSession = async () => {
-    const res = await fetch("http://localhost:8000/session/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "expert" }),
-    });
-    const body = await res.json();
-    setSessionId(body.session_id);
-    setInspected(new Set());
-    setWarning(null);
+    try {
+      const res = await fetch("http://localhost:8000/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const body = await res.json();
+      setSessionId(body.session_id);
+      setInspected(new Set());
+      setWarning(null);
+    } catch (err) {
+      console.error("Failed to start session:", err);
+    }
   };
 
+  // Session Stop
   const stopSession = async () => {
-    const res = await fetch("http://localhost:8000/session/stop", { method: "POST" });
-    const body = await res.json();
-    setSessionId(body.session_id);
+    try {
+      const res = await fetch("http://localhost:8000/session/stop", { method: "POST" });
+      const body = await res.json();
+      setSessionId(body.session_id);
+      setTab("comparison"); // Switch to comparison/summary tab upon completion
+    } catch (err) {
+      console.error("Failed to stop session:", err);
+    }
   };
 
+  // Keyboard controls synchronization
   useEffect(() => {
     sendKeys(Array.from(keysDown));
   }, [keysDown, sendKeys]);
 
   useEffect(() => {
-    // lower-case so Shift+W and a later plain "w" keyup refer to the same key
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "TEXTAREA" || (e.target as HTMLElement)?.tagName === "INPUT") return;
       const key = e.key.toLowerCase();
-      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "shift"].includes(key)) {
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "shift", "w", "s", "a", "d", "q", "e"].includes(key)) {
         e.preventDefault();
       }
       setKeysDown((prev) => {
@@ -87,6 +119,7 @@ export function App() {
       });
     };
     const onBlur = () => setKeysDown(new Set());
+
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -98,51 +131,96 @@ export function App() {
   }, []);
 
   const pos = state?.pos ?? [-10, -10, 0];
-  const yaw = state?.rpy?.[2] ?? 0;
-
-  const replay = async (t: number) => {
-    if (!sessionId) return;
-    const res = await fetch(`http://localhost:8000/session/${sessionId}/replay?t=${t}`);
-    const body = await res.json();
-    setWarning(`Replay @ ${body.t?.toFixed?.(1) ?? t}s`);
-  };
+  const yaw = state?.yaw ?? state?.rpy?.[2] ?? 0;
 
   return (
     <div className="app">
       <header>
-        <h2>Robot Apprentice</h2>
-        <span className="mode">Expert flight</span>
-        <button onClick={startSession}>Start</button>
-        <button onClick={stopSession}>Stop</button>
-        <button onClick={() => { setSessionId(null); setWarning(null); setInspected(new Set()); }}>Run demo</button>
-        <span className="controls">W/S or ↑/↓: forward/back · A/D: strafe · Q/E or ←/→: turn · Space/Shift: up/down</span>
+        <div className="brand">
+          <h2>⚡ Power Line AI Apprentice</h2>
+          <span className="subbrand">Drone Maintenance &amp; Operator Knowledge Transfer</span>
+        </div>
+
+        <div className="mode-toggle">
+          <label>Mode:</label>
+          <select value={mode} onChange={(e) => setMode(e.target.value as "expert" | "novice")}>
+            <option value="expert">Senior Operator (AI Learns)</option>
+            <option value="novice">Junior Operator (AI Coaches)</option>
+          </select>
+        </div>
+
+        <div className="header-actions">
+          <button className="btn-start" onClick={startSession}>
+            ▶ Start Flight
+          </button>
+          <button className="btn-stop" onClick={stopSession} disabled={!sessionId}>
+            ⏹ End Flight
+          </button>
+        </div>
+
+        <span className="controls-hint">
+          W/S: fwd/back · A/D: strafe · Q/E: yaw · Space/Shift: climb/descend
+        </span>
       </header>
+
       <main>
+        {/* Left Section: 3D Simulation & Flight Gauges */}
         <section className="left" tabIndex={0}>
           <Scene3D scene={scene} pos={pos} yaw={yaw} inspected={inspected} />
-          <Hud state={state} warning={warning} insulatorCount={scene?.insulators.length ?? 0} />
+          <Hud
+            state={state}
+            warning={warning}
+            insulatorCount={scene?.insulators.length ?? 6}
+            mode={mode}
+          />
           <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} />
         </section>
+
+        {/* Right Section: Interaction Tabs */}
         <section className="right">
           <div className="tabs">
-            <button onClick={() => setTab("voice")}>Voice</button>
-            <button onClick={() => setTab("workmap")}>Work Map</button>
-            <button onClick={() => setTab("guardrails")}>Guardrails</button>
+            <button
+              className={tab === "voice" ? "active" : ""}
+              onClick={() => setTab("voice")}
+            >
+              🎙️ ElevenLabs Voice &amp; Dialogue
+            </button>
+            <button
+              className={tab === "knowledge" ? "active" : ""}
+              onClick={() => setTab("knowledge")}
+            >
+              📘 knowledge.md
+            </button>
+            <button
+              className={tab === "comparison" ? "active" : ""}
+              onClick={() => setTab("comparison")}
+            >
+              📊 Debrief &amp; Compare
+            </button>
           </div>
-          {tab === "voice" && (
-            <VoicePanel
-              mode="expert"
-              sessionId={sessionId}
-              simTime={state?.t ?? 0}
-              events={events as any}
-              expertQuestions={expertQuestions}
-              guardrailContext={undefined}
-            />
-          )}
-          {tab === "workmap" && <WorkMap sessionId={sessionId} onReplay={replay} onGuardrailsSaved={setGuardrails} />}
-          {tab === "guardrails" && <pre>{JSON.stringify(guardrails, null, 2)}</pre>}
+
+          <div className="tab-content">
+            {tab === "voice" && (
+              <VoicePanel
+                mode={mode}
+                sessionId={sessionId}
+                simTime={state?.t ?? 0}
+                events={events as any}
+                latestQuestion={latestQuestion}
+                latestAdvice={latestAdvice}
+                onKnowledgeUpdated={() => setKbRefreshKey((k) => k + 1)}
+              />
+            )}
+
+            {tab === "knowledge" && <KnowledgeViewer refreshKey={kbRefreshKey} />}
+
+            {tab === "comparison" && (
+              <FlightComparison currentSessionId={sessionId} />
+            )}
+          </div>
         </section>
       </main>
     </div>
   );
 }
+
