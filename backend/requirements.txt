@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+numpy
+cvxpy
+osqp
+anthropic
+python-dotenv
