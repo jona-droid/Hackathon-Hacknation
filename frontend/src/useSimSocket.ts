@@ -36,7 +36,12 @@ export function useSimSocket() {
       state,
       events,
       predictedPath,
-      sendKeys: (down: string[]) => wsRef.current?.send(JSON.stringify({ type: "keys", down })),
+      sendKeys: (down: string[]) => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "keys", down }));
+        }
+      },
     }),
     [events, predictedPath, state]
   );
