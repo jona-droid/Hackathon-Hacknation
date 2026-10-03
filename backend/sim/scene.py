@@ -66,6 +66,51 @@ def inside_tree(pos: np.ndarray, scene: Scene) -> bool:
     return (dx * dx + dy * dy) <= scene.tree_radius * scene.tree_radius and pos[2] <= scene.tree_height
 
 
+TREE_CANOPY_RADIUS = 3.0
+
+
+def _segment_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    ab = b - a
+    s = float(np.clip(np.dot(p - a, ab) / max(float(np.dot(ab, ab)), 1e-9), 0.0, 1.0))
+    return float(np.linalg.norm(p - (a + s * ab)))
+
+
+def clearances(pos: np.ndarray, scene: Scene) -> dict[str, Any]:
+    """Distances from the drone to every hazard and inspection target, in metres."""
+    cable_pt, cable_dist = nearest_cable_point(pos, scene)
+
+    pylon_dist = min(
+        _segment_dist(pos, np.array([x, 0.0, 0.0]), np.array([x, 0.0, scene.pylon_height]))
+        for x in scene.pylon_x
+    )
+
+    tx, ty = scene.tree_center
+    trunk = _segment_dist(pos, np.array([tx, ty, 0.0]), np.array([tx, ty, scene.tree_height])) - scene.tree_radius
+    canopy = float(np.linalg.norm(pos - np.array([tx, ty, scene.tree_height + 2.0]))) - TREE_CANOPY_RADIUS
+    tree_dist = max(0.0, min(trunk, canopy))
+
+    ins_id, ins_dist = min(
+        ((ins["id"], float(np.linalg.norm(pos - _vec(ins["pos"])))) for ins in scene.insulators),
+        key=lambda item: item[1],
+    )
+
+    r0, r1 = scene.road_x
+    road_dist = float(max(0.0, r0 - pos[0], pos[0] - r1))
+
+    return {
+        "altitude": float(pos[2]),
+        "cable_dist": cable_dist,
+        "cable_dz": float(pos[2] - cable_pt[2]),  # >0: above the nearest cable
+        "nearest_cable_point": cable_pt,
+        "pylon_dist": pylon_dist,
+        "tree_dist": tree_dist,
+        "nearest_insulator": ins_id,
+        "insulator_dist": ins_dist,
+        "road_dist": road_dist,
+        "over_road": road_dist == 0.0,
+    }
+
+
 def scene_json(scene: Scene) -> dict[str, Any]:
     cables: list[list[list[float]]] = []
     for y in scene.cable_y:

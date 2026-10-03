@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from backend.core.config import ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID
+from backend.api.observer import observe_once
 from backend.core.state import runtime
 
 logger = logging.getLogger("robot-apprentice.dialogue")
@@ -41,29 +42,16 @@ class TTSRequest(BaseModel):
 
 
 @router.post("/dialogue/trigger-question")
-async def trigger_question(event: dict[str, Any] | None = None) -> dict[str, Any]:
-    telemetry = runtime.drone.snapshot()
-    ev = event or {"type": "manual_inquiry", "t": telemetry["t"]}
-    frame = runtime.camera.get_latest_frame()
-
-    result = await asyncio.to_thread(
-        runtime.questioner.generate_question,
-        event=ev,
-        telemetry=telemetry,
-        image_b64=frame,
-    )
-    runtime.latest_question = result
-
-    # Log to session transcript if active
-    if runtime.recorder:
-        runtime.recorder.record_transcript({
-            "role": "apprentice_model",
-            "text": result["question"],
-            "t": telemetry["t"],
-            "event": ev,
-        })
-
-    return result
+async def trigger_question() -> dict[str, Any]:
+    """Operator pressed "Ask Question Now": the observer must ask about the recent flight."""
+    if not runtime.observer.is_available:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the server.")
+    if runtime.observer_busy:
+        raise HTTPException(status_code=409, detail="The observer is already thinking; try again in a moment.")
+    payload = await observe_once(force=True)
+    if payload is None:
+        raise HTTPException(status_code=502, detail="The observer did not produce a question.")
+    return payload
 
 
 @router.post("/dialogue/answer")
@@ -72,6 +60,10 @@ async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
 
     telemetry = runtime.drone.snapshot()
+    for qa in reversed(runtime.qa_history):
+        if qa["answer"] is None:
+            qa["answer"] = payload.answer
+            break
     context = payload.context or {
         "telemetry": telemetry,
         "event": runtime.latest_question.get("event") if runtime.latest_question else {"type": "inspection"},

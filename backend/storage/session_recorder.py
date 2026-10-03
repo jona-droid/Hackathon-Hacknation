@@ -34,6 +34,7 @@ class SessionRecorder:
     telemetry_path: Path = field(init=False)
     events_path: Path = field(init=False)
     transcript_path: Path = field(init=False)
+    observer_path: Path = field(init=False)
     meta_path: Path = field(init=False)
     summary_path: Path = field(init=False)
     frames_dir: Path = field(init=False)
@@ -44,6 +45,7 @@ class SessionRecorder:
         self.telemetry_path = self.root / "telemetry.jsonl"
         self.events_path = self.root / "events.jsonl"
         self.transcript_path = self.root / "transcript.jsonl"
+        self.observer_path = self.root / "observer.jsonl"
         self.meta_path = self.root / "meta.json"
         self.summary_path = self.root / "summary.json"
         self.frames_dir = self.root / "frames"
@@ -75,6 +77,9 @@ class SessionRecorder:
 
     def record_transcript(self, item: dict[str, Any]) -> None:
         _append_jsonl(self.transcript_path, item)
+
+    def record_observation(self, item: dict[str, Any]) -> None:
+        _append_jsonl(self.observer_path, item)
 
     def save_frame(self, t: float, b64_frame: str) -> str:
         try:

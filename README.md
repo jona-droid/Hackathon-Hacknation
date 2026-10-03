@@ -10,6 +10,7 @@ This project is a drone inspection simulation with a FastAPI backend, a React/Vi
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── dialogue_routes.py
+│   │   ├── observer.py
 │   │   ├── knowledge_routes.py
 │   │   ├── session_routes.py
 │   │   └── ws.py
@@ -23,13 +24,14 @@ This project is a drone inspection simulation with a FastAPI backend, a React/Vi
 │   │   ├── client.py
 │   │   ├── comparator.py
 │   │   ├── knowledge_manager.py
-│   │   ├── questioner.py
+│   │   ├── observer.py
 │   │   ├── summarizer.py
 │   │   └── prompts/
 │   ├── sim/
 │   │   ├── __init__.py
 │   │   ├── camera.py
 │   │   ├── detector.py
+│   │   ├── flight_log.py
 │   │   ├── drone.py
 │   │   └── scene.py
 │   ├── storage/
@@ -66,7 +68,7 @@ The app simulates a drone flying an inspection route around power line infrastru
 
 The project supports different operator modes:
 
-- expert mode: manual flight and event-triggered questions
+- expert mode: manual flight; an LLM observer watches the telemetry and decides when to ask the pilot a question
 - novice mode: AI guidance and advice during flight
 - tutor mode: coaching-style guidance for training scenarios
 
@@ -86,6 +88,16 @@ Key backend areas:
 - [backend/llm](backend/llm): question generation, advice, knowledge management, and prompts
 - [backend/sim](backend/sim): drone, scene, detector, and camera logic
 - [backend/storage](backend/storage): persistent session and knowledge storage
+
+### Expert-mode observer (telemetry → Claude → ElevenLabs)
+
+1. Every simulation step, [backend/sim/drone.py](backend/sim/drone.py) snapshots position, speed, acceleration, heading and clearances (altitude, distance and height relative to the nearest cable, distance to the nearest pylon, tree, insulator and road).
+2. [backend/sim/flight_log.py](backend/sim/flight_log.py) keeps every sample since takeoff (10 Hz) and computes whole-flight patterns in Python: returning to an earlier position, flying in circles, insulators approached, and a coarse path overview. The same telemetry is also written to `data/sessions/<id>/telemetry.jsonl`.
+3. Every `OBSERVER_INTERVAL_S` (3 s), [backend/api/observer.py](backend/api/observer.py) sends the last `OBSERVER_WINDOW_S` (5 s) of telemetry, the whole-flight patterns, and the recent questions and answers to `OBSERVER_MODEL` (Claude Haiku 4.5). No images are sent. The prompt is in [backend/llm/prompts/observer.txt](backend/llm/prompts/observer.txt).
+4. Claude returns structured output `{observation, ask_question, question}`. When it asks, the exact question goes over the websocket and the frontend speaks it word for word through ElevenLabs text-to-speech (`/elevenlabs/tts`).
+5. The operator's answer (`/dialogue/answer`) is stored with the question and distilled into `knowledge.md`.
+
+The observer only runs during an active expert session, while the drone is airborne. It skips a round while a question is waiting for an answer (`UNANSWERED_QUESTION_TIMEOUT_S`, default 30 s) and for `QUESTION_COOLDOWN_S` (default 15 s) after each question. Every decision is logged to `data/sessions/<id>/observer.jsonl`. "Ask Question Now" forces a question. Each call sends about 4k input tokens; with Haiku 4.5 that is roughly $0.004 per call, at most about $5 per hour of continuous flying.
 
 ## Frontend
 

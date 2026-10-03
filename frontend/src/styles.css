@@ -470,3 +470,4 @@ main { display: flex; flex: 1; min-height: 0; }
 .instructor-verdict h4 { margin: 0 0 6px 0; font-size: 0.9rem; color: var(--accent); }
 .instructor-verdict p { margin: 0; font-size: 0.85rem; line-height: 1.45; color: #fff; font-style: italic; }
 
+.observer-line { font-size: 0.82rem; color: #9fb3c8; font-style: italic; margin: 6px 0; }

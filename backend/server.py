@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api import dialogue_router, knowledge_router, session_router, ws_router, broadcast
+from backend.api.observer import observer_loop
 from backend.core.config import BROADCAST_HZ, SIM_HZ
 from backend.core.state import runtime
 from backend.sim.scene import scene_json
@@ -32,14 +33,6 @@ app.include_router(knowledge_router)
 app.include_router(ws_router)
 
 
-QUESTION_TRIGGER_EVENTS = {
-    "hover_start",
-    "sudden_deceleration",
-    "very_close_cable",
-    "insulator_inspected",
-    "over_road",
-}
-
 ADVICE_TRIGGER_EVENTS = {
     "near_cable",
     "very_close_cable",
@@ -47,31 +40,6 @@ ADVICE_TRIGGER_EVENTS = {
     "hover_start",
     "collision",
 }
-
-
-async def _handle_expert_event(ev: dict[str, Any], telemetry: dict[str, Any]) -> None:
-    now = time.time()
-    if ev.get("type") in QUESTION_TRIGGER_EVENTS and (now - runtime.last_question_time > 8.0):
-        runtime.last_question_time = now
-        try:
-            frame = runtime.camera.get_latest_frame()
-            q_res = await asyncio.to_thread(
-                runtime.questioner.generate_question,
-                event=ev,
-                telemetry=telemetry,
-                image_b64=frame,
-            )
-            runtime.latest_question = q_res
-            await broadcast({"type": "question", **q_res})
-            if runtime.recorder:
-                runtime.recorder.record_transcript({
-                    "role": "apprentice_model",
-                    "text": q_res["question"],
-                    "t": telemetry["t"],
-                    "event": ev,
-                })
-        except Exception:
-            logger.exception("Error generating expert question")
 
 
 async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) -> None:
@@ -113,16 +81,16 @@ async def sim_loop() -> None:
             state = runtime.drone.snapshot()
             state["mode"] = runtime.mode
             state["inspected_count"] = len(runtime.detector.inspected)
+            runtime.flight_log.record(state)
 
             for ev in events:
                 await broadcast({"type": "event", **ev})
+                runtime.flight_log.record_event(ev)
                 if runtime.recorder:
                     runtime.recorder.record_event(ev)
 
-                # Event-driven AI interaction
-                if runtime.mode == "expert":
-                    asyncio.create_task(_handle_expert_event(ev, state))
-                elif runtime.mode in {"novice", "tutor"}:
+                # Expert questions come from the periodic observer (backend/api/observer.py)
+                if runtime.mode in {"novice", "tutor"}:
                     asyncio.create_task(_handle_novice_event(ev, state))
 
             if runtime.recorder:
@@ -142,6 +110,7 @@ async def sim_loop() -> None:
 @app.on_event("startup")
 async def _startup() -> None:
     asyncio.create_task(sim_loop())
+    asyncio.create_task(observer_loop())
 
 
 @app.get("/scene")

@@ -27,6 +27,8 @@ export type AIQuestion = {
   t: number;
 };
 
+export type AIObservation = { t: number; observation: string; asked: boolean };
+
 export type AIAdvice = {
   speech: string;
   category: "safety_alert" | "technique_tip" | "qa_response";
@@ -39,6 +41,7 @@ export function useSimSocket() {
   const [events, setEvents] = useState<SimEvent[]>([]);
   const [latestQuestion, setLatestQuestion] = useState<AIQuestion | null>(null);
   const [latestAdvice, setLatestAdvice] = useState<AIAdvice | null>(null);
+  const [latestObservation, setLatestObservation] = useState<AIObservation | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -57,6 +60,7 @@ export function useSimSocket() {
           if (data.type === "warning") setEvents((prev) => [...prev.slice(-99), data]);
           if (data.type === "question") setLatestQuestion(data);
           if (data.type === "advice") setLatestAdvice(data);
+          if (data.type === "observation") setLatestObservation(data);
         } catch (e) {
           console.error("WS parse error:", e);
         }
@@ -81,6 +85,7 @@ export function useSimSocket() {
       events,
       latestQuestion,
       latestAdvice,
+      latestObservation,
       sendKeys: (down: string[]) => {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
@@ -94,7 +99,7 @@ export function useSimSocket() {
         }
       },
     }),
-    [events, state, latestQuestion, latestAdvice]
+    [events, state, latestQuestion, latestAdvice, latestObservation]
   );
 
   return api;

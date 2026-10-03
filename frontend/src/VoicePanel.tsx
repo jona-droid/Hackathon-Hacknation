@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConversation } from "@elevenlabs/react";
-import { AIAdvice, AIQuestion } from "./useSimSocket";
+import { AIAdvice, AIObservation, AIQuestion } from "./useSimSocket";
 
 type TranscriptRow = { role: string; text: string; t?: number; tag?: string };
 
@@ -11,6 +11,7 @@ export function VoicePanel(props: {
   events: Array<{ type: string; [k: string]: unknown }>;
   latestQuestion: AIQuestion | null;
   latestAdvice: AIAdvice | null;
+  latestObservation?: AIObservation | null;
   onKnowledgeUpdated?: () => void;
 }) {
   const {
@@ -20,6 +21,7 @@ export function VoicePanel(props: {
     events,
     latestQuestion,
     latestAdvice,
+    latestObservation,
     onKnowledgeUpdated,
   } = props;
 
@@ -189,8 +191,17 @@ export function VoicePanel(props: {
         body: JSON.stringify({ type: "manual_inquiry", t: simTime }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        alert(data.detail ?? "Could not get a question from the apprentice.");
+        return;
+      }
       if (data.question) {
+        lastQuestionRef.current = data.question;
         setCurrentQuestion(data.question);
+        setTranscript((prev) => [
+          ...prev.slice(-40),
+          { role: "apprentice_model", text: data.question, t: data.t, tag: "Question" },
+        ]);
         speakText(data.question);
       }
     } catch (err) {
@@ -286,6 +297,12 @@ export function VoicePanel(props: {
               Ask Question Now
             </button>
           </div>
+
+          {latestObservation && (
+            <div className="observer-line">
+              👁 {latestObservation.observation}
+            </div>
+          )}
 
           <div className="question-card">
             <strong>Current Question:</strong>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from typing import Any
 import numpy as np
 
@@ -20,6 +21,8 @@ class EventDetector:
         self.mission_complete_sent = False
         self.inspected: set[str] = set()
         self.insulator_hover_time: dict[str, float] = {}
+        self.recent_speeds: deque[tuple[float, float]] = deque()
+        self.prev_braked = False
 
     def reset(self) -> None:
         self.prev_hover = False
@@ -32,6 +35,8 @@ class EventDetector:
         self.mission_complete_sent = False
         self.inspected.clear()
         self.insulator_hover_time.clear()
+        self.recent_speeds.clear()
+        self.prev_braked = False
 
     def update(self, drone: DroneSim, dt: float) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -86,15 +91,20 @@ class EventDetector:
         if near_tree and not self.prev_near_tree:
             events.append({"type": "near_tree", "t": t, "pos": pos.tolist()})
 
-        # Sudden deceleration (braking / reaction)
-        acc_magnitude = float(np.linalg.norm(drone.acc))
-        if acc_magnitude > 3.0 and speed < 1.0:
+        # Sudden deceleration: speed fell from >= 3 m/s to < 1 m/s within 1.5 s (fires once per stop)
+        self.recent_speeds.append((t, speed))
+        while t - self.recent_speeds[0][0] > 1.5:
+            self.recent_speeds.popleft()
+        peak_speed = max(s for _, s in self.recent_speeds)
+        braked = speed < 1.0 and peak_speed >= 3.0 and not drone.collided
+        if braked and not self.prev_braked:
             events.append({
                 "type": "sudden_deceleration",
                 "t": t,
-                "acc": round(acc_magnitude, 2),
+                "from_speed": round(peak_speed, 2),
                 "pos": pos.tolist(),
             })
+        self.prev_braked = braked
 
         # Insulator inspection tracking
         for ins in self.scene.insulators:

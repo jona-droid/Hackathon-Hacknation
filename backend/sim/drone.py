@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 import numpy as np
 
-from backend.sim.scene import Scene, inside_tree, nearest_cable_point
+from backend.sim.scene import Scene, clearances, inside_tree, nearest_cable_point
 
 START_POS = np.array([-10.0, -10.0, 0.05], dtype=float)
 FORWARD_SPEED = 13.0
@@ -40,7 +40,6 @@ class DroneSim:
     collided: bool = False
     tau: float = 0.35
     elapsed_time: float = 0.0
-    _last_vel: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=float))
 
     def reset(self) -> None:
         self.pos = START_POS.copy()
@@ -53,7 +52,6 @@ class DroneSim:
         self.roll = 0.0
         self.collided = False
         self.elapsed_time = 0.0
-        self._last_vel = np.zeros(3, dtype=float)
 
     @property
     def speed(self) -> float:
@@ -101,11 +99,13 @@ class DroneSim:
         self.elapsed_time += dt
         if self.collided:
             # Drone falls under gravity if collided
+            self.acc = np.array([0.0, 0.0, -9.81])
             self.vel[2] -= 9.81 * dt
             self.pos += self.vel * dt
             if self.pos[2] <= 0.0:
                 self.pos[2] = 0.0
                 self.vel[:] = 0.0
+                self.acc = np.zeros(3, dtype=float)
             return
 
         alpha = min(1.0, dt / max(self.tau, 1e-4))
@@ -122,8 +122,7 @@ class DroneSim:
 
         # Compute acceleration
         if dt > 0:
-            self.acc = (new_vel - self._last_vel) / dt
-        self._last_vel = self.vel.copy()
+            self.acc = (new_vel - self.vel) / dt
         self.vel = new_vel
 
         # Integrate position
@@ -155,18 +154,30 @@ class DroneSim:
             self.v_cmd[:] = 0.0
 
     def snapshot(self) -> dict[str, Any]:
-        cable_pt, cable_dist = nearest_cable_point(self.pos, self.scene)
+        c = clearances(self.pos, self.scene)
+        horiz_speed = math.hypot(self.vel[0], self.vel[1])
         return {
             "pos": [round(float(x), 3) for x in self.pos],
             "vel": [round(float(x), 3) for x in self.vel],
             "acc": [round(float(x), 3) for x in self.acc],
             "speed": round(self.speed, 2),
+            "horizontal_speed": round(horiz_speed, 2),
+            "vertical_speed": round(float(self.vel[2]), 2),
+            "acc_magnitude": round(float(np.linalg.norm(self.acc)), 2),
             "altitude": round(self.altitude, 2),
             "yaw": round(self.yaw, 3),
+            "heading_deg": round((90.0 - math.degrees(self.yaw)) % 360.0, 1),
             "rpy": [round(float(x), 3) for x in self.rpy],
             "quat": [round(float(x), 4) for x in self.quat],
-            "cable_dist": round(cable_dist, 2),
-            "nearest_cable_point": [round(float(x), 3) for x in cable_pt],
+            "cable_dist": round(c["cable_dist"], 2),
+            "cable_dz": round(c["cable_dz"], 2),
+            "nearest_cable_point": [round(float(x), 3) for x in c["nearest_cable_point"]],
+            "pylon_dist": round(c["pylon_dist"], 2),
+            "tree_dist": round(c["tree_dist"], 2),
+            "nearest_insulator": c["nearest_insulator"],
+            "insulator_dist": round(c["insulator_dist"], 2),
+            "road_dist": round(c["road_dist"], 2),
+            "over_road": c["over_road"],
             "collided": self.collided,
             "t": round(self.elapsed_time, 2),
         }

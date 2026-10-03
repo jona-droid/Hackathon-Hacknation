@@ -17,7 +17,7 @@ export function App() {
   const [tab, setTab] = useState<"voice" | "knowledge" | "comparison">("voice");
   const [kbRefreshKey, setKbRefreshKey] = useState<number>(0);
 
-  const { state, events, latestQuestion, latestAdvice, sendKeys, sendFrame } = useSimSocket();
+  const { state, events, latestQuestion, latestAdvice, latestObservation, sendKeys, sendFrame } = useSimSocket();
   const lastFrameSendTime = useRef<number>(0);
 
   // Load 3D scene data
@@ -208,6 +208,7 @@ export function App() {
                 events={events as any}
                 latestQuestion={latestQuestion}
                 latestAdvice={latestAdvice}
+                latestObservation={latestObservation}
                 onKnowledgeUpdated={() => setKbRefreshKey((k) => k + 1)}
               />
             )}

@@ -32,3 +32,12 @@ BROADCAST_HZ = 30.0
 RECORD_HZ = 10.0
 MIN_CABLE_SAFE_DISTANCE = 2.5
 MAX_APPROACH_SPEED = 2.0
+
+# LLM flight observer: every OBSERVER_INTERVAL_S it sends the last OBSERVER_WINDOW_S
+# of telemetry (plus whole-flight patterns) to Claude, which decides whether to ask
+# the operator a question.
+OBSERVER_MODEL = os.getenv("OBSERVER_MODEL", "claude-haiku-4-5")
+OBSERVER_INTERVAL_S = float(os.getenv("OBSERVER_INTERVAL_S", "3.0"))
+OBSERVER_WINDOW_S = float(os.getenv("OBSERVER_WINDOW_S", "5.0"))
+QUESTION_COOLDOWN_S = float(os.getenv("QUESTION_COOLDOWN_S", "15.0"))
+UNANSWERED_QUESTION_TIMEOUT_S = float(os.getenv("UNANSWERED_QUESTION_TIMEOUT_S", "30.0"))
