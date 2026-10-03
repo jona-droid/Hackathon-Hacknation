@@ -6,6 +6,7 @@ import { MiniMap } from "./MiniMap";
 import { Scene3D, SceneData } from "./Scene3D";
 import { VoicePanel } from "./VoicePanel";
 import { useSimSocket } from "./useSimSocket";
+import { API_URL } from "./config";
 
 export function App() {
   const [mode, setMode] = useState<"expert" | "novice">("expert");
@@ -22,7 +23,7 @@ export function App() {
 
   // Load 3D scene data
   useEffect(() => {
-    fetch("http://localhost:8000/scene")
+    fetch(`${API_URL}/scene`)
       .then((r) => r.json())
       .then(setScene)
       .catch((error) => console.warn("Backend unavailable: scene could not be loaded.", error));
@@ -66,7 +67,7 @@ export function App() {
   // Session Start
   const startSession = async () => {
     try {
-      const res = await fetch("http://localhost:8000/session/start", {
+      const res = await fetch(`${API_URL}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
@@ -83,7 +84,7 @@ export function App() {
   // Session Stop
   const stopSession = async () => {
     try {
-      const res = await fetch("http://localhost:8000/session/stop", { method: "POST" });
+      const res = await fetch(`${API_URL}/session/stop`, { method: "POST" });
       const body = await res.json();
       setSessionId(body.session_id);
       setTab("comparison"); // Switch to comparison/summary tab upon completion

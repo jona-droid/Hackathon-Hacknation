@@ -1,0 +1,44 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  # FastAPI backend (REST + WebSocket + simulation loop)
+  - type: web
+    name: robot-apprentice-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    # Run from repo root so the `backend` package imports resolve.
+    startCommand: uvicorn backend.server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: 21m00Tcm4TlvDq8ikWAM
+      - key: ELEVENLABS_AGENT_ID
+        sync: false
+      - key: ELEVENLABS_TUTOR_AGENT_ID
+        sync: false
+
+  # React/Vite frontend, served as a static site
+  - type: web
+    name: robot-apprentice-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Public URL of the backend service above, e.g. https://robot-apprentice-api.onrender.com
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_ELEVENLABS_AGENT_ID
+        sync: false
+      - key: VITE_ELEVENLABS_TUTOR_AGENT_ID
+        sync: false

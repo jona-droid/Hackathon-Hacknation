@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConversation } from "@elevenlabs/react";
 import { AIAdvice, AIObservation, AIQuestion } from "./useSimSocket";
+import { API_URL } from "./config";
 
 type TranscriptRow = { role: string; text: string; t?: number; tag?: string };
 
@@ -53,7 +54,7 @@ export function VoicePanel(props: {
       setTranscript((prev) => [...prev.slice(-40), row]);
 
       if (sessionId) {
-        await fetch(`http://localhost:8000/session/${sessionId}/transcript`, {
+        await fetch(`${API_URL}/session/${sessionId}/transcript`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ role, text, t: simTime }),
@@ -102,7 +103,7 @@ export function VoicePanel(props: {
     if (!text) return;
     setAudioPlaying(true);
     try {
-      const res = await fetch("http://localhost:8000/elevenlabs/tts", {
+      const res = await fetch(`${API_URL}/elevenlabs/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -185,7 +186,7 @@ export function VoicePanel(props: {
   // Expert Mode: Trigger manual question from AI
   const triggerQuestion = async () => {
     try {
-      const res = await fetch("http://localhost:8000/dialogue/trigger-question", {
+      const res = await fetch(`${API_URL}/dialogue/trigger-question`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "manual_inquiry", t: simTime }),
@@ -216,7 +217,7 @@ export function VoicePanel(props: {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch("http://localhost:8000/dialogue/answer", {
+      const res = await fetch(`${API_URL}/dialogue/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -253,7 +254,7 @@ export function VoicePanel(props: {
     ]);
 
     try {
-      const res = await fetch("http://localhost:8000/dialogue/advise", {
+      const res = await fetch(`${API_URL}/dialogue/advise`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, query }),

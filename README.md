@@ -156,6 +156,10 @@ Then open the Vite URL shown in the terminal, usually:
 
 - http://localhost:5173
 
+## Deploy on Render
+
+[render.yaml](render.yaml) defines two services: `robot-apprentice-api` (FastAPI web service) and `robot-apprentice-frontend` (static site). In Render, choose **New > Blueprint**, select this repo, and fill in the secret env vars. Set `VITE_API_URL` on the frontend to the backend's public URL (e.g. `https://robot-apprentice-api.onrender.com`). It is baked in at build time, so redeploy the frontend whenever you change it.
+
 ## Data and session storage
 
 Runtime artifacts are stored under [data](data):
