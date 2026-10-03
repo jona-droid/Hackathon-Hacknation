@@ -1,7 +1,6 @@
 fastapi
 uvicorn[standard]
 numpy
-cvxpy
-osqp
+PyFlyt
 anthropic
 python-dotenv

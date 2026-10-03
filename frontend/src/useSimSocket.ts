@@ -5,6 +5,8 @@ export type SimState = {
   t: number;
   pos: number[];
   vel: number[];
+  rpy: number[];
+  quat: number[];
   cable_dist: number;
   collided: boolean;
   mode: string;
@@ -15,7 +17,6 @@ export type SimState = {
 export function useSimSocket() {
   const [state, setState] = useState<SimState | null>(null);
   const [events, setEvents] = useState<SimEvent[]>([]);
-  const [predictedPath, setPredictedPath] = useState<number[][]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -26,7 +27,6 @@ export function useSimSocket() {
       if (data.type === "state") setState(data);
       if (data.type === "event") setEvents((prev) => [...prev.slice(-99), data]);
       if (data.type === "warning") setEvents((prev) => [...prev.slice(-99), data]);
-      if (data.type === "predicted_path") setPredictedPath((data.points ?? []).map((p: any) => p.pos));
     };
     return () => ws.close();
   }, []);
@@ -35,7 +35,6 @@ export function useSimSocket() {
     () => ({
       state,
       events,
-      predictedPath,
       sendKeys: (down: string[]) => {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
@@ -43,7 +42,7 @@ export function useSimSocket() {
         }
       },
     }),
-    [events, predictedPath, state]
+    [events, state]
   );
 
   return api;

@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.expert import EXPERT_INTERVIEW_QUESTIONS
+from backend.flight import FlightSim
 from backend.guardrails import check, default_guardrails, validate_guardrails
-from backend.mission import MissionPlanner
-from backend.mpc import solve_mpc
-from backend.predictor import WarningLatch
 from backend.recorder import append_transcript, replay_state, start_session
-from backend.sim import Drone, EventDetector, Scene, scene_json, snapshot
+from backend.sim import EventDetector, Scene, scene_json, snapshot
 from backend.workmap import generate_work_map, save_work_map
 
 logging.basicConfig(level=logging.INFO)
@@ -26,31 +23,23 @@ logger = logging.getLogger("robot-apprentice")
 @dataclass
 class SimRuntime:
     scene: Scene = field(default_factory=Scene)
-    drone: Drone = field(default_factory=Drone)
+    drone: FlightSim = field(init=False)
     detector: EventDetector = field(init=False)
     mode: str = "expert"
-    t: float = 0.0
     guardrails: list[dict[str, Any]] = field(default_factory=default_guardrails)
     keys_down: set[str] = field(default_factory=set)
     clients: set[WebSocket] = field(default_factory=set)
     recorder: Any = None
-    warning_latch: WarningLatch = field(default_factory=WarningLatch)
-    mission: MissionPlanner = field(init=False)
-    active_warning: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        self.drone = FlightSim(self.scene)
         self.detector = EventDetector(self.scene)
-        self.mission = MissionPlanner(self.scene, self.guardrails)
 
-    def reset(self, mode: str) -> None:
-        self.mode = mode
-        self.t = 0.0
+    def reset(self) -> None:
+        self.mode = "expert"
+        self.keys_down = set()
         self.drone.reset()
         self.detector.reset()
-        self.warning_latch = WarningLatch()
-        self.active_warning = None
-        self.mission = MissionPlanner(self.scene, self.guardrails)
-        self.mission.reset(self.drone.pos.copy())
 
 
 runtime = SimRuntime()
@@ -61,26 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _keys_to_cmd(keys: set[str]) -> np.ndarray:
-    k = {x.lower() for x in keys}
-    vx = 0.0
-    vy = 0.0
-    vz = 0.0
-    if "w" in k or "arrowup" in k:
-        vx += 4.0
-    if "s" in k or "arrowdown" in k:
-        vx -= 4.0
-    if "a" in k or "arrowleft" in k:
-        vy += 4.0
-    if "d" in k or "arrowright" in k:
-        vy -= 4.0
-    if " " in k or "space" in k:
-        vz += 2.0
-    if "shift" in k:
-        vz -= 2.0
-    return np.array([vx, vy, vz], dtype=float)
 
 
 async def _broadcast(payload: dict[str, Any]) -> None:
@@ -101,51 +70,36 @@ async def _emit_event(ev: dict[str, Any]) -> None:
 
 
 async def sim_loop() -> None:
-    sim_dt = 1.0 / 50.0
-    frame_dt = 1.0 / 30.0
+    tick = 1.0 / 60.0
+    frame_dt = 1.0 / 60.0
     last_frame = 0.0
+    last_wall = time.perf_counter()
     while True:
         try:
-            if runtime.mode == "autonomous":
-                mission_state = runtime.mission.current_reference(runtime.drone.pos.copy(), runtime.t)
-                p_ref = np.array(mission_state.get("p_ref", runtime.drone.pos.tolist()))
-                mpc = solve_mpc(runtime.drone.pos.copy(), runtime.drone.vel.copy(), p_ref, runtime.guardrails, runtime.scene)
-                runtime.drone.v_cmd = mpc.v_cmd
-                if mission_state.get("done"):
-                    runtime.drone.v_cmd = np.zeros(3)
-            else:
-                cmd = _keys_to_cmd(runtime.keys_down)
-                if runtime.mode == "tutor":
-                    path, warning = runtime.warning_latch.update(runtime.drone, cmd, runtime.scene, runtime.guardrails)
-                    runtime.active_warning = warning
-                    if warning:
-                        await _broadcast(warning)
-                    if warning and warning.get("in_s", 9) < 0.7:
-                        cmd = np.zeros(3)
-                        await _broadcast({"type": "assist", "enabled": True})
-                    await _broadcast({"type": "predicted_path", "points": path})
-                runtime.drone.v_cmd = cmd
+            now = time.perf_counter()
+            runtime.drone.set_keys(runtime.keys_down)
+            runtime.drone.advance(now - last_wall)
+            last_wall = now
+            t = runtime.drone.t
 
-            runtime.drone.step(sim_dt, wind_enabled=True)
-            runtime.t += sim_dt
-            events = runtime.detector.update(runtime.drone, runtime.t)
+            events = runtime.detector.update(runtime.drone, t)
             for ev in events:
                 await _emit_event(ev)
 
             state = snapshot(runtime.drone, runtime.scene)
             state["mode"] = runtime.mode
-            state["t"] = runtime.t
+            state["t"] = t
             state["inspected_count"] = len(runtime.detector.inspected)
             state["violations"] = check(state, runtime.guardrails, runtime.scene)
 
             if runtime.recorder:
-                runtime.recorder.record_state(runtime.t, state)
+                runtime.recorder.record_state(t, state)
 
-            if runtime.t - last_frame >= frame_dt:
+            if t < last_frame or t - last_frame >= frame_dt:
                 await _broadcast({"type": "state", **state})
-                last_frame = runtime.t
+                last_frame = t
 
-            await asyncio.sleep(sim_dt)
+            await asyncio.sleep(tick)
         except Exception:
             logger.exception("Sim loop error")
             await asyncio.sleep(0.05)
@@ -174,12 +128,12 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
 @app.post("/session/start")
 async def session_start(payload: dict[str, str]) -> dict[str, Any]:
-    mode = payload.get("mode", "expert")
-    if mode not in {"expert", "tutor", "autonomous"}:
-        raise HTTPException(status_code=400, detail="Invalid mode")
-    runtime.reset(mode)
-    runtime.recorder = start_session(mode)
-    return {"session_id": runtime.recorder.session_id, "mode": mode}
+    requested_mode = payload.get("mode", "expert")
+    if requested_mode != "expert":
+        raise HTTPException(status_code=400, detail="Only Expert mode is currently available")
+    runtime.reset()
+    runtime.recorder = start_session("expert")
+    return {"session_id": runtime.recorder.session_id, "mode": "expert"}
 
 
 @app.post("/session/stop")
@@ -213,6 +167,11 @@ async def get_guardrails() -> dict[str, Any]:
     return {"guardrails": runtime.guardrails}
 
 
+@app.get("/expert/questions")
+async def expert_questions() -> dict[str, Any]:
+    return {"questions": EXPERT_INTERVIEW_QUESTIONS}
+
+
 @app.put("/guardrails")
 async def put_guardrails(payload: dict[str, Any]) -> dict[str, Any]:
     guardrails = validate_guardrails(payload.get("guardrails", []))
@@ -237,7 +196,12 @@ async def replay(session_id: str, t: float) -> dict[str, Any]:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "mode": runtime.mode, "clients": len(runtime.clients)}
+    return {
+        "ok": True,
+        "mode": runtime.mode,
+        "clients": len(runtime.clients),
+        "simulator": "pyflyt",
+    }
 
 
 if __name__ == "__main__":

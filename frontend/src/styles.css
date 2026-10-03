@@ -2,6 +2,8 @@
 body { margin: 0; background: #111; color: #f5f5f5; }
 .app { height: 100vh; display: flex; flex-direction: column; }
 header { display: flex; gap: 10px; padding: 10px; align-items: center; background: #1a1a1a; }
+.controls { margin-left: auto; color: #aaa; font-size: 0.85rem; }
+.mode { color: #8fd3ff; font-weight: 600; }
 main { display: flex; flex: 1; }
 .left { flex: 7; position: relative; outline: none; }
 .right { flex: 3; padding: 10px; overflow: auto; background: #171717; }
@@ -12,3 +14,4 @@ main { display: flex; flex: 1; }
 .badge { background: #333; padding: 2px 6px; border-radius: 999px; font-size: 0.75rem; }
 .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
 textarea { width: 100%; background: #0f0f0f; color: #eee; border: 1px solid #333; }
+.minimap { position: absolute; right: 10px; bottom: 10px; width: 300px; border: 1px solid #555; border-radius: 6px; opacity: 0.9; }

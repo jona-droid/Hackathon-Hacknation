@@ -6,13 +6,14 @@ type Row = { role: string; text: string; t: number };
 const FORWARD_TYPES = new Set(["hover_start", "very_close_cable", "over_road", "near_tree", "insulator_inspected", "land", "collision"]);
 
 export function VoicePanel(props: {
-  mode: "expert" | "tutor" | "autonomous";
+  mode: "expert" | "tutor";
   sessionId: string | null;
   simTime: number;
   events: Array<{ type: string; [k: string]: unknown }>;
+  expertQuestions: string[];
   guardrailContext?: string;
 }) {
-  const { mode, sessionId, simTime, events, guardrailContext } = props;
+  const { mode, sessionId, simTime, events, expertQuestions, guardrailContext } = props;
   const agentId = mode === "tutor" ? import.meta.env.VITE_ELEVENLABS_TUTOR_AGENT_ID : import.meta.env.VITE_ELEVENLABS_AGENT_ID;
   const [rows, setRows] = useState<Row[]>([]);
   const [status, setStatus] = useState("idle");
@@ -40,6 +41,11 @@ export function VoicePanel(props: {
     (async () => {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       await conversation.startSession({ agentId });
+      if (mode === "expert" && expertQuestions.length > 0) {
+        await conversation.sendContextualUpdate?.(
+          `You are interviewing a drone pilot before and during a manual inspection. Ask these questions one at a time, wait for concise answers, and never control the drone: ${expertQuestions.join(" | ")}`
+        );
+      }
       if (mode === "tutor" && guardrailContext) {
         await conversation.sendContextualUpdate?.(guardrailContext);
       }
@@ -47,7 +53,7 @@ export function VoicePanel(props: {
     return () => {
       conversation.endSession?.();
     };
-  }, [agentId, conversation, mode, guardrailContext]);
+  }, [agentId, conversation, mode, expertQuestions, guardrailContext]);
 
   useEffect(() => {
     const ev = events[events.length - 1];

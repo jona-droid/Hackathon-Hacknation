@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import math
-import random
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from backend.flight import FlightSim
 
 
 def _vec(v: list[float] | tuple[float, ...] | np.ndarray) -> np.ndarray:
@@ -20,8 +21,8 @@ class Scene:
     sag: float = 4.0
     road_x: tuple[float, float] = (82.0, 90.0)
     tree_center: tuple[float, float] = (30.0, 9.0)
-    tree_radius: float = 2.0
-    tree_height: float = 11.0
+    tree_radius: float = 1.5
+    tree_height: float = 15.0
 
     @property
     def insulators(self) -> list[dict[str, Any]]:
@@ -32,40 +33,6 @@ class Scene:
                 out.append({"id": f"i{idx}", "pos": [px, y, self.pylon_height]})
                 idx += 1
         return out
-
-
-@dataclass
-class Drone:
-    pos: np.ndarray = field(default_factory=lambda: np.array([-10.0, -10.0, 0.0], dtype=float))
-    vel: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=float))
-    v_cmd: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=float))
-    tau: float = 0.35
-    max_speed: float = 5.0
-    collided: bool = False
-
-    def reset(self) -> None:
-        self.pos = np.array([-10.0, -10.0, 0.0], dtype=float)
-        self.vel = np.zeros(3, dtype=float)
-        self.v_cmd = np.zeros(3, dtype=float)
-        self.collided = False
-
-    def step(self, dt: float, wind_enabled: bool = True) -> None:
-        if self.collided:
-            return
-        alpha = min(1.0, dt / max(self.tau, 1e-6))
-        wind = np.zeros(3)
-        if wind_enabled:
-            wind = np.array([
-                random.uniform(-0.25, 0.25),
-                random.uniform(-0.25, 0.25),
-                random.uniform(-0.1, 0.1),
-            ])
-        target = np.clip(self.v_cmd + wind, -self.max_speed, self.max_speed)
-        self.vel = (1.0 - alpha) * self.vel + alpha * target
-        self.pos = self.pos + self.vel * dt
-        self.pos[2] = max(0.0, self.pos[2])
-        if self.pos[2] <= 0.0 and self.vel[2] < 0:
-            self.vel[2] = 0.0
 
 
 def cable_height_at(x: float, x0: float, x1: float, z_top: float, sag: float) -> float:
@@ -115,7 +82,7 @@ class EventDetector:
     def reset(self) -> None:
         self.__init__(self.scene)
 
-    def update(self, drone: Drone, t: float) -> list[dict[str, Any]]:
+    def update(self, drone: FlightSim, t: float) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         _, cable_dist = nearest_cable_point(drone.pos, self.scene)
         speed = float(np.linalg.norm(drone.vel))
@@ -157,11 +124,10 @@ class EventDetector:
             self.mission_complete_sent = True
             events.append({"type": "mission_complete", "t": t})
 
-        collided = cable_dist < 0.5 or inside_tree(drone.pos, self.scene)
+        collided = drone.collided or cable_dist < 0.5 or inside_tree(drone.pos, self.scene)
         if collided and not self.collision_sent:
-            drone.collided = True
-            drone.vel[:] = 0
-            drone.v_cmd[:] = 0
+            if not drone.collided:
+                drone.crash()
             self.collision_sent = True
             events.append({"type": "collision", "t": t, "cable_dist": cable_dist})
 
@@ -174,9 +140,10 @@ class EventDetector:
         return events
 
 
-def snapshot(drone: Drone, scene: Scene) -> dict[str, Any]:
+def snapshot(drone: FlightSim, scene: Scene) -> dict[str, Any]:
     cable_point, cable_dist = nearest_cable_point(drone.pos, scene)
     return {
+        **drone.pose_json(),
         "pos": drone.pos.tolist(),
         "vel": drone.vel.tolist(),
         "v_cmd": drone.v_cmd.tolist(),

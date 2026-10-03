@@ -3,16 +3,24 @@
 Voice-powered AI apprentice for power-line drone inspection simulation.
 
 ## Stack
-- Backend: Python 3.11 + FastAPI + NumPy + CVXPY/OSQP + Anthropic
-- Frontend: Vite + React + TypeScript + react-three-fiber + ElevenLabs React SDK
+- Simulation: [PyFlyt](https://pypi.org/project/PyFlyt/) (PyBullet) quadrotor physics, all installed from PyPI
+- Backend: Python + FastAPI + NumPy + Anthropic
+- Frontend: Vite + React + TypeScript + three.js; first-person (POV) view, HUD and minimap
 
 ## Run backend
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r backend/requirements.txt
+CFLAGS="-Dfdopen=fdopen" pip install -r backend/requirements.txt
 uvicorn backend.server:app --reload --port 8000
 ```
+
+`CFLAGS="-Dfdopen=fdopen"` is needed on recent macOS: pybullet has no macOS
+wheel and its bundled zlib does not compile against the current SDK without it.
+
+The backend runs a PyFlyt `QuadX` drone (flight mode 4: forward/left velocity,
+yaw rate, altitude hold). Pylons, insulators and the tree are PyBullet collision
+bodies; touching one (or a cable) cuts the motors and the drone falls.
 
 ## Run frontend
 ```bash
@@ -21,10 +29,11 @@ npm install
 npm run dev
 ```
 
-## Modes
-- Expert: manual keyboard flight (WASD/arrows, Space up, Shift down)
-- Tutor: expert guardrails + predicted violation warnings
-- Autonomous: mission with MPC tracking and guardrail constraints
+## Current mode
+
+- Expert only: manual first-person flight — W/S or ↑/↓ forward/back, A/D strafe, Q/E or ←/→ turn, Space up, Shift down
+- Tutor is intentionally deferred until the Expert interview/question flow is stable.
+- Autonomous flight and MPC have been removed.
 
 ## Architecture
 - WebSocket `ws://localhost:8000/ws` for state/events/keys
