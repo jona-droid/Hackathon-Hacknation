@@ -15,7 +15,7 @@ from backend.guardrails import check, default_guardrails, validate_guardrails
 from backend.mission import MissionPlanner
 from backend.mpc import solve_mpc
 from backend.predictor import WarningLatch
-from backend.recorder import replay_state, start_session
+from backend.recorder import append_transcript, replay_state, start_session
 from backend.sim import Drone, EventDetector, Scene, scene_json, snapshot
 from backend.workmap import generate_work_map, save_work_map
 
@@ -197,9 +197,7 @@ async def add_transcript(session_id: str, payload: dict[str, Any]) -> dict[str, 
     if runtime.recorder and runtime.recorder.session_id == session_id:
         runtime.recorder.record_transcript(payload)
     else:
-        rec = start_session("import")
-        rec.session_id = session_id
-        rec.record_transcript(payload)
+        append_transcript(session_id, payload)
     return {"ok": True}
 
 

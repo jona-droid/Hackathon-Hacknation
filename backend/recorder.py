@@ -110,3 +110,9 @@ def replay_state(session_id: str, t: float) -> dict[str, Any] | None:
     if not rows:
         return None
     return min(rows, key=lambda r: abs(float(r.get("t", 0.0)) - t))
+
+
+def append_transcript(session_id: str, item: dict[str, Any]) -> None:
+    root = DATA_DIR / session_id
+    root.mkdir(parents=True, exist_ok=True)
+    _append_jsonl(root / "transcript.jsonl", item)
