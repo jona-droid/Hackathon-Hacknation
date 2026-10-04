@@ -11,8 +11,7 @@ load_dotenv(ROOT_DIR / ".env")
 # API Keys & IDs
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "")
-ELEVENLABS_TUTOR_AGENT_ID = os.getenv("ELEVENLABS_TUTOR_AGENT_ID", "")
+ELEVENLABS_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2")  # transcribes spoken answers
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Rachel default
 
 # Storage Paths
@@ -37,6 +36,8 @@ MAX_APPROACH_SPEED = 2.0
 # of telemetry (plus whole-flight patterns) to Claude, which decides whether to ask
 # the operator a question.
 OBSERVER_MODEL = os.getenv("OBSERVER_MODEL", "claude-haiku-4-5")
+# Live novice tutor: frequent calls during the flight, so the fast model
+TUTOR_MODEL = os.getenv("TUTOR_MODEL", "claude-haiku-4-5")
 OBSERVER_INTERVAL_S = float(os.getenv("OBSERVER_INTERVAL_S", "3.0"))
 OBSERVER_WINDOW_S = float(os.getenv("OBSERVER_WINDOW_S", "5.0"))
 QUESTION_COOLDOWN_S = float(os.getenv("QUESTION_COOLDOWN_S", "15.0"))

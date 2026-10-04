@@ -3,3 +3,4 @@ uvicorn[standard]
 numpy>=2.2.0
 anthropic
 python-dotenv
+httpx2

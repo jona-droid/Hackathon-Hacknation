@@ -4,17 +4,25 @@ import asyncio
 import base64
 import json
 import logging
-import urllib.error
-import urllib.request
 from typing import Any
-from fastapi import APIRouter, HTTPException, Response
+import httpx2 as httpx
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from backend.core.config import ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID
+from backend.core.config import ELEVENLABS_API_KEY, ELEVENLABS_STT_MODEL, ELEVENLABS_VOICE_ID
 from backend.api.observer import observe_once
 from backend.core.state import runtime
 
 logger = logging.getLogger("robot-apprentice.dialogue")
+
+# One shared ElevenLabs client: it uses the macOS trust store (like the Anthropic SDK), keeps its TLS
+# connection open between calls instead of a new handshake per question, and retries a failed connect once.
+_elevenlabs = httpx.Client(
+    base_url="https://api.elevenlabs.io",
+    headers={"xi-api-key": ELEVENLABS_API_KEY},
+    timeout=30.0,
+    transport=httpx.HTTPTransport(retries=1),
+)
 router = APIRouter(tags=["Dialogue & Voice"])
 
 
@@ -58,25 +66,26 @@ async def trigger_question() -> dict[str, Any]:
     return payload
 
 
-@router.post("/dialogue/answer")
-async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
-    if not payload.answer.strip():
-        raise HTTPException(status_code=400, detail="Answer cannot be empty")
-
-    telemetry = runtime.drone.snapshot()
+def _close_pending_question(answer: str) -> None:
+    """Record the answer on the latest unanswered question so the observer can ask again."""
     for qa in reversed(runtime.qa_history):
         if qa["answer"] is None:
-            qa["answer"] = payload.answer
+            qa["answer"] = answer
             break
-    context = payload.context or {
+
+
+async def _process_answer(question: str, answer: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    telemetry = runtime.drone.snapshot()
+    _close_pending_question(answer)
+    context = context or {
         "telemetry": telemetry,
         "event": runtime.latest_question.get("event") if runtime.latest_question else {"type": "inspection"},
     }
 
     result = await asyncio.to_thread(
         runtime.knowledge_manager.process_operator_response,
-        question=payload.question,
-        answer=payload.answer,
+        question=question,
+        answer=answer,
         context=context,
     )
 
@@ -84,12 +93,59 @@ async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
     if runtime.recorder:
         runtime.recorder.record_transcript({
             "role": "expert_operator",
-            "text": payload.answer,
+            "text": answer,
             "t": telemetry["t"],
             "distilled_insight": result.get("insight"),
         })
 
     return {"ok": True, **result}
+
+
+@router.post("/dialogue/answer")
+async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
+    if not payload.answer.strip():
+        raise HTTPException(status_code=400, detail="Answer cannot be empty")
+    return await _process_answer(payload.question, payload.answer, payload.context)
+
+
+def _transcribe(audio: bytes, content_type: str) -> str:
+    """ElevenLabs speech-to-text (no LLM): audio bytes -> text, language auto-detected."""
+    resp = _elevenlabs.post(
+        "/v1/speech-to-text",
+        data={"model_id": ELEVENLABS_STT_MODEL},
+        files={"file": ("answer", audio, content_type)},
+    )
+    resp.raise_for_status()
+    return resp.json().get("text", "").strip()
+
+
+@router.post("/dialogue/voice-answer")
+async def receive_voice_answer(request: Request, question: str) -> dict[str, Any]:
+    """Body = the recorded answer audio. Transcribed by ElevenLabs, then processed like a typed answer."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured on the server.")
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="No audio received")
+    try:
+        transcript = await asyncio.to_thread(_transcribe, audio, request.headers.get("content-type", "audio/webm"))
+    except httpx.HTTPStatusError as e:
+        logger.error(f"ElevenLabs speech-to-text error: {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"Speech-to-text failed: {e.response.text}")
+    except httpx.TransportError as e:
+        logger.error(f"Cannot reach ElevenLabs: {e}")
+        raise HTTPException(status_code=502, detail=f"Cannot reach ElevenLabs (network or certificate problem): {e}")
+    if not transcript:
+        _close_pending_question("(no answer)")
+        return {"ok": False, "transcript": "", "insight": None}
+    return {"transcript": transcript, **await _process_answer(question, transcript)}
+
+
+@router.post("/dialogue/skip")
+async def skip_question() -> dict[str, Any]:
+    """Pilot skipped the question (Esc) or said nothing: let the observer move on."""
+    _close_pending_question("(no answer)")
+    return {"ok": True}
 
 
 @router.post("/dialogue/advise")
@@ -143,36 +199,20 @@ async def elevenlabs_text_to_speech(payload: TTSRequest) -> Response:
         )
 
     voice_id = payload.voice_id or ELEVENLABS_VOICE_ID
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    data = json.dumps({
+    body = {
         "text": payload.text,
         "model_id": "eleven_flash_v2_5",  # low-latency; the v1 models were retired
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.8,
-        },
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        },
-        method="POST",
-    )
-
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
+    }
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            audio_bytes = resp.read()
-            return Response(content=audio_bytes, media_type="audio/mpeg")
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
-        logger.error(f"ElevenLabs TTS error: {err_msg}")
-        raise HTTPException(status_code=e.code, detail=f"ElevenLabs TTS failed: {err_msg}")
-    except Exception as e:
-        logger.exception("ElevenLabs TTS request error")
-        raise HTTPException(status_code=500, detail=str(e))
+        resp = await asyncio.to_thread(
+            _elevenlabs.post, f"/v1/text-to-speech/{voice_id}", json=body, headers={"Accept": "audio/mpeg"}
+        )
+        resp.raise_for_status()
+        return Response(content=resp.content, media_type="audio/mpeg")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"ElevenLabs TTS error: {e.response.text}")
+        raise HTTPException(status_code=e.response.status_code, detail=f"ElevenLabs TTS failed: {e.response.text}")
+    except httpx.TransportError as e:
+        logger.error(f"Cannot reach ElevenLabs: {e}")
+        raise HTTPException(status_code=502, detail=f"Cannot reach ElevenLabs (network or certificate problem): {e}")

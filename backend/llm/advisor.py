@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from backend.core.config import TUTOR_MODEL
 from backend.llm.client import LLMClient
 from backend.storage.knowledge_store import get_knowledge
 
@@ -89,7 +90,7 @@ def _fallback_advice(
 
 class Advisor:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self.client = client or LLMClient()
+        self.client = client or LLMClient(model=TUTOR_MODEL, timeout=15.0)
         self.system_prompt = (
             PROMPT_PATH.read_text(encoding="utf-8")
             if PROMPT_PATH.exists()

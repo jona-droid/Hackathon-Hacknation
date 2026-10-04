@@ -1,8 +1,6 @@
 from backend.core.config import (
     ANTHROPIC_API_KEY,
     ELEVENLABS_API_KEY,
-    ELEVENLABS_AGENT_ID,
-    ELEVENLABS_TUTOR_AGENT_ID,
     ELEVENLABS_VOICE_ID,
     KNOWLEDGE_FILE,
     SESSIONS_DIR,
@@ -12,8 +10,6 @@ from backend.core.config import (
 __all__ = [
     "ANTHROPIC_API_KEY",
     "ELEVENLABS_API_KEY",
-    "ELEVENLABS_AGENT_ID",
-    "ELEVENLABS_TUTOR_AGENT_ID",
     "ELEVENLABS_VOICE_ID",
     "KNOWLEDGE_FILE",
     "SESSIONS_DIR",

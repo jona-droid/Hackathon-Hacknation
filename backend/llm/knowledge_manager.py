@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ from backend.llm.client import LLMClient
 from backend.storage.knowledge_store import append_insight, get_knowledge, save_knowledge
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "knowledge_builder.txt"
+logger = logging.getLogger("robot-apprentice.knowledge")
 
 
 class KnowledgeManager:
@@ -42,10 +44,14 @@ class KnowledgeManager:
                 insight_text = self.client.call_multimodal(
                     prompt=prompt,
                     system=self.system_prompt,
-                    max_tokens=250,
+                    max_tokens=300,
                 )
         except Exception:
-            pass
+            logger.exception("Knowledge distillation failed; saving the raw answer")
+
+        if insight_text.strip().upper().strip(".") == "NONE":
+            # small talk / off-topic: nothing to add to knowledge.md
+            return {"insight": None, "rejected": True, "question": question, "answer": answer}
 
         if not insight_text:
             # Fallback deterministic distillation

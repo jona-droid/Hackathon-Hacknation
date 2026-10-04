@@ -8,18 +8,19 @@ from backend.core.config import ANTHROPIC_API_KEY
 
 logger = logging.getLogger("robot-apprentice.llm")
 
-DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+# Knowledge distillation, flight summary and comparison: rare calls where quality matters.
+DEFAULT_MODEL = "claude-opus-5-5"
 
 
 class LLMClient:
-    def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL) -> None:
+    def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL, timeout: float = 60.0) -> None:
         self.api_key = api_key or ANTHROPIC_API_KEY
         self.model = model
         self._client = None
         if self.api_key:
             try:
                 from anthropic import Anthropic
-                self._client = Anthropic(api_key=self.api_key, timeout=4.0)
+                self._client = Anthropic(api_key=self.api_key, timeout=timeout, max_retries=1)
             except Exception as e:
                 logger.warning(f"Could not initialize Anthropic client: {e}")
 
@@ -54,16 +55,32 @@ class LLMClient:
             })
 
         content.append({"type": "text", "text": prompt})
+        messages = [{"role": "user", "content": content}]
 
-        response = self._client.messages.create(
-            model=self.model,
-            system=system,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        if self.model.startswith("claude-haiku"):
+            response = self._client.messages.create(
+                model=self.model,
+                system=system,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        else:
+            # Opus 5.5: thinking is always on (thinking tokens count toward max_tokens), sampling
+            # parameters are rejected, and "fallbacks" re-runs a declined request on another model.
+            response = self._client.beta.messages.create(
+                model=self.model,
+                system=system,
+                messages=messages,
+                max_tokens=max_tokens + 8000,
+                output_config={"effort": "low"},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            )
 
-        text_parts = [block.text for block in response.content if hasattr(block, "text")]
+        if response.stop_reason == "refusal":
+            raise RuntimeError("Claude declined the request")
+        text_parts = [block.text for block in response.content if block.type == "text"]
         return "".join(text_parts).strip()
 
     def call_json(
