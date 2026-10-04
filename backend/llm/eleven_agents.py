@@ -3,11 +3,13 @@
 Two ElevenLabs conversational agents, created and kept up to date through the ElevenLabs API:
 - interviewer: asks the expert's questions during the flight, runs the debrief and the teach-back;
 - tutor: coaches the novice, asks "what would the expert do here?", judges the answer.
-Their LLM is hosted by ElevenLabs (ELEVENLABS_AGENT_LLM, GLM 5.2 by default): ElevenLabs words
-the questions, listens (Scribe realtime, turn-taking) and speaks (Expressive Mode). The backend
-only decides when and what to ask (attention model, debrief gaps, decision points: no LLM) and
-sends a cue; the agent hands the answers back through client tools (save_answer,
-teachback_verdict, log_prediction...) that the browser forwards to the backend.
+Their LLM is picked in ElevenAgents (ELEVENLABS_AGENT_LLM). The agent decides whether a moment is
+worth a question, which gap to ask about, how to word it, when to follow up and when it has
+understood enough; it listens (Scribe v2 Realtime, turn-taking) and speaks (Expressive Mode). The
+backend only notices the moments and the gaps (attention model, debrief gaps, decision points: no
+LLM) and sends a cue; the agent hands the answers back through client tools (save_answer,
+teachback_verdict, log_prediction...) that the browser forwards to the backend. Claude only
+distils the answers into rules and writes the summaries.
 
 The API key stays on the server: the browser gets a short-lived signed URL per conversation.
 Agent and tool ids are cached in data/elevenlabs_agents.json with a hash of their config, so a
@@ -40,7 +42,8 @@ logger = logging.getLogger("robot-apprentice.agents")
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 CACHE_PATH = DATA_DIR / "elevenlabs_agents.json"
 TAG = "ai-apprentice"
-FALLBACK_LLMS = ["glm-52", "qwen35-397b-a17b", "deepseek-v41-flash", "qwen36-35b-a3b"]  # all hosted by ElevenLabs
+# Models offered by ElevenAgents that make real tool calls (GLM 5.2 sometimes wrote them as text, spoken aloud)
+FALLBACK_LLMS = ["claude-sonnet-5-5", "gemini-3.5-flash", "claude-haiku-4-5", "qwen35-397b-a17b"]
 FALLBACK_TTS = ["eleven_v3_conversational", "eleven_flash_v2"]
 
 
@@ -51,9 +54,16 @@ def _param(kind: str, description: str, **extra: Any) -> dict[str, Any]:
 # Client tools: run in the browser (frontend/src/voiceAgent.ts), which forwards them to the backend
 CLIENT_TOOLS: dict[str, dict[str, Any]] = {
     "save_answer": {
-        "description": "Call when the pilot has answered your question. Pass their answer verbatim, in their own words.",
-        "parameters": {"type": "object", "required": ["answer"], "properties": {
-            "answer": _param("string", "The pilot's answer, verbatim, not summarised.")}},
+        "description": "Call once you have understood enough of the pilot's answer (after your follow-up, if you asked one). Pass everything they answered, verbatim.",
+        "parameters": {"type": "object", "required": ["answer", "slot"], "properties": {
+            "answer": _param("string", "The pilot's answer (with their answer to your follow-up), verbatim, not summarised."),
+            "slot": _param("string", "The id of the option you asked about, copied from the cue."),
+            "understood": _param("boolean", "True if you now know the rule, why, and its limit or exception; false if part is still missing.")}},
+    },
+    "not_now": {
+        "description": "Call instead of asking when an [ASK] moment is not worth a question now (the rule is already known, or the pilot is too busy).",
+        "parameters": {"type": "object", "required": ["reason"], "properties": {
+            "reason": _param("string", "Why you do not ask, in a few words.")}},
     },
     "skip_question": {
         "description": "Call when the pilot does not answer your question, does not know, or does not want to answer.",
@@ -84,7 +94,7 @@ ROLES: dict[str, dict[str, Any]] = {
     "interviewer": {
         "name": "AI Apprentice · Interviewer",
         "prompt_file": "agent_interviewer.txt",
-        "tools": ["save_answer", "skip_question", "save_note", "teachback_verdict"],
+        "tools": ["save_answer", "not_now", "skip_question", "save_note", "teachback_verdict"],
         "placeholders": {},
         "temperature": 0.4,
     },

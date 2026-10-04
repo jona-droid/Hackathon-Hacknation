@@ -289,7 +289,7 @@ class DebriefAgent:
 
     # ---- 3. answers -------------------------------------------------------------------
 
-    def answer(self, session_id: str, item_id: int, text: str, asked: str | None = None) -> dict[str, Any]:
+    def answer(self, session_id: str, item_id: int, text: str, asked: str | None = None, slot: str | None = None) -> dict[str, Any]:
         state = debrief_store.load(session_id)
         if not state:
             raise KeyError("no debrief for this session")
@@ -297,7 +297,9 @@ class DebriefAgent:
         if item is None:
             raise KeyError("unknown question")
         if asked:
-            item["question"] = asked  # the voice agent's own words
+            item["question"] = asked  # the voice agent's own words (it asked its own follow-ups)
+        if slot and slot in competence_store.SLOTS and slot != item["slot"]:
+            item.update({"slot": slot, "slot_name": competence_store.slot_name(slot), "hypothesis": None, "deviation": None})
         flight = load_flight(session_id)
         eps = [ep for ep in flight.episodes_of(item["task"])] if flight else []
         ep = max(eps, key=lambda e: e.duration) if eps else None
@@ -312,7 +314,7 @@ class DebriefAgent:
         item["learned"] = result.get("insight")
         item["learned_slot"] = result.get("slot_name")
         follow = (result.get("follow_up") or "").strip()
-        if follow and item["kind"] != "follow_up":
+        if follow and item["kind"] != "follow_up" and not asked:  # the agent decides when it has understood enough
             pos = state["items"].index(item) + 1
             state["items"].insert(pos, {**item, "id": max(it["id"] for it in state["items"]) + 1, "kind": "follow_up",
                                         "question": follow, "why": "the answer was too vague", "status": "pending",

@@ -17,7 +17,7 @@ export type AgentHandlers = {
   tools: Record<string, (params: Record<string, unknown>) => Promise<string>>;
 };
 
-export const AGENT_TOOLS = ["save_answer", "skip_question", "save_note", "teachback_verdict", "log_prediction"];
+export const AGENT_TOOLS = ["save_answer", "not_now", "skip_question", "save_note", "teachback_verdict", "log_prediction"];
 
 /** Expressive Mode text carries audio tags such as [happy]: shown without them. */
 export const stripTags = (text: string) => text.replace(/\[[^\]]{1,30}\]\s*/g, "").trim();

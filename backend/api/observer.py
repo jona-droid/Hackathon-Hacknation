@@ -176,30 +176,45 @@ def _qa_for_prompt() -> list[dict[str, Any]]:
 
 # ---- asking ---------------------------------------------------------------------------
 
+def _agent_option(target: attention.Target, deviation: dict[str, Any] | None) -> dict[str, Any]:
+    """One gap the ElevenLabs agent may ask about: what to learn, the evidence, an example."""
+    spec = competence_store.SLOTS[target.slot]
+    opt: dict[str, Any] = {"id": target.slot, "topic": competence_store.slot_name(target.slot), "kind": target.kind,
+                           "learn": spec["learn"], "why": target.why, "example_question": target.example_question}
+    if target.hypothesis:
+        opt["observed_habit"] = target.hypothesis["text"]
+    if target.kind == "deviation" and deviation:
+        opt["deviation"] = {k: deviation[k] for k in ("rule", "expected", "now") if k in deviation}
+    return opt
+
+
 def _agent_cue(question: str, slot: str | None, kind: str, reasons: list[str], ep: Any,
-               deviation: dict[str, Any] | None, hypothesis: dict[str, Any] | None) -> dict[str, Any]:
-    """What the ElevenLabs agent needs to word the question itself: why now, what to learn, the
-    measured evidence, an example. No LLM on our side."""
-    cue: dict[str, Any] = {"kind": kind, "why_now": reasons[:3], "example_question": question}
-    if slot:
-        spec = competence_store.SLOTS[slot]
-        cue.update({"slot": competence_store.slot_name(slot), "learn": spec["learn"]})
-        known = [competence_store.describe(k, e) for k, e in competence_store.load().items()
-                 if competence_store.SLOTS[k]["task"] == spec["task"]]
-        if known:
-            cue["known_rules"] = known[:3]
+               deviation: dict[str, Any] | None, hypothesis: dict[str, Any] | None,
+               targets: list[attention.Target] | None = None) -> dict[str, Any]:
+    """What the ElevenLabs agent needs to decide whether to ask now, what to ask and when it has
+    understood enough: why now, the open gaps it may ask about, the measured evidence, the rules
+    already known. No LLM on our side."""
+    if targets:
+        options = [_agent_option(tg, deviation) for tg in targets]
+    elif slot:
+        options = [_agent_option(attention.Target(slot, kind, reasons[0] if reasons else "", question, hypothesis), deviation)]
+    else:  # the pilot pressed Ask now and nothing stands out
+        options = [{"id": "", "topic": "what the pilot is doing", "kind": "rule", "example_question": question,
+                    "learn": "What the pilot is doing now, why, and what a novice should know about it"}]
+    cue: dict[str, Any] = {"why_now": reasons[:3], "options": options}
+    tasks = {competence_store.SLOTS[o["id"]]["task"] for o in options if o["id"]}
+    known = [competence_store.describe(k, e) for k, e in competence_store.load().items()
+             if competence_store.SLOTS[k]["task"] in tasks]
+    if known:
+        cue["known_rules"] = known[:4]
     if ep is not None:
         cue["measured"] = {m: ep.signature[m] for m in TASK_METRICS.get(ep.task, []) if m in ep.signature}
-    if hypothesis:
-        cue["observed_habit"] = hypothesis["text"]
-    if deviation:
-        cue["deviation"] = {k: deviation[k] for k in ("rule", "expected", "now") if k in deviation}
     return cue
 
 
 def _push_question(t: float, question: str, slot: str | None, kind: str, observation: str,
                    deviation: dict[str, Any] | None = None, hypothesis: dict[str, Any] | None = None,
-                   reasons: list[str] | None = None) -> dict[str, Any]:
+                   reasons: list[str] | None = None, targets: list[attention.Target] | None = None) -> dict[str, Any]:
     """Register a question (for the answer to know its slot and episode) and build its payload.
     With the ElevenAgents voice, `question` is only an example: the agent words it (see /agent/asked)."""
     task = competence_store.SLOTS[slot]["task"] if slot else None
@@ -216,6 +231,9 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
         "hypothesis": hypothesis,
         "episode": {"task": ep.task, "start": ep.start} if ep else None,
         "cue_id": cue_id,
+        # ElevenAgents: the gaps the agent may choose from (save_answer names the one it asked about)
+        "options": {tg.slot: {"kind": tg.kind, "hypothesis": tg.hypothesis,
+                              "deviation": deviation if tg.kind == "deviation" else None} for tg in targets or []},
     })
     payload = {
         "question": question,
@@ -229,7 +247,7 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
         "cue_id": cue_id,
     }
     if runtime.voice_agent:
-        payload["cue"] = _agent_cue(question, slot, kind, reasons or [observation], ep, deviation, hypothesis)
+        payload["cue"] = _agent_cue(question, slot, kind, reasons or [observation], ep, deviation, hypothesis, targets)
     runtime.latest_question = payload
     if runtime.recorder and not runtime.voice_agent:  # the agent's own wording is recorded by /agent/asked
         runtime.recorder.record_transcript({"role": "apprentice_model", "text": question, "t": t, "slot": slot, "kind": kind})
@@ -237,8 +255,9 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
 
 
 def cue_moment(t: float, moment: attention.Moment | None, force: bool = False) -> dict[str, Any] | None:
-    """ElevenAgents voice: the attention model's choice becomes a cue for the agent, without calling
-    Claude. Preferred target: a deviation, then a habit to confirm, then the first open slot."""
+    """ElevenAgents voice: the attention model's moment becomes a cue for the agent, without calling
+    Claude. The agent decides whether it is worth asking now and which of the gaps to ask about; the
+    default (for the record) is a deviation, then a habit to confirm, then the first open slot."""
     if moment is None:
         return None
     targets = moment.targets
@@ -260,8 +279,12 @@ def cue_moment(t: float, moment: attention.Moment | None, force: bool = False) -
     if runtime.recorder:
         runtime.recorder.record_observation({"t": t, "forced": force, "why_now": moment.reasons, "cue_for_agent": True,
                                              "target_slot": target.slot if target else None, "kind": kind})
-    return _push_question(t, example, target.slot if target else None, kind, observation, deviation=dev,
-                          hypothesis=target.hypothesis if target else None, reasons=moment.reasons)
+    payload = _push_question(t, example, target.slot if target else None, kind, observation, deviation=dev,
+                             hypothesis=target.hypothesis if target else None, reasons=moment.reasons,
+                             targets=[tg for tg in moment.targets if tg.kind != "deviation" or dev])
+    if force and "cue" in payload:
+        payload["cue"]["asked_by_pilot"] = True  # the pilot pressed Ask now: the agent must ask
+    return payload
 
 
 def _ask_follow_up(t: float) -> dict[str, Any] | None:

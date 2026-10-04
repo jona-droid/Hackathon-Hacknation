@@ -35,6 +35,7 @@ class AnswerRequest(BaseModel):
     answer: str
     context: dict[str, Any] | None = None
     cue_id: str | None = None  # ElevenAgents: the cue the agent asked about
+    slot: str | None = None  # ElevenAgents: the gap the agent chose among the cue's options
 
 
 class AdviseRequest(BaseModel):
@@ -92,7 +93,16 @@ def _measured(qa: dict[str, Any]) -> tuple[str | None, dict[str, float]]:
     return (ep.task, ep.signature) if ep else (None, {})
 
 
-async def _process_answer(question: str, answer: str, cue_id: str | None = None) -> dict[str, Any]:
+def _agent_choice(qa: dict[str, Any], slot: str | None) -> None:
+    """The ElevenLabs agent chose which of the offered gaps it asked about: the answer goes to that slot."""
+    opt = (qa.get("options") or {}).get(slot or "")
+    if opt is None:
+        return
+    qa.update({"slot": slot, "kind": opt["kind"] if opt["kind"] != "deviation" or opt["deviation"] else "rule",
+               "hypothesis": opt["hypothesis"], "deviation": opt["deviation"]})
+
+
+async def _process_answer(question: str, answer: str, cue_id: str | None = None, slot: str | None = None) -> dict[str, Any]:
     """An answer to the apprentice's question, or (empty question) a note the pilot volunteered."""
     t = runtime.drone.elapsed_time
     note = not question.strip() and not cue_id
@@ -103,7 +113,8 @@ async def _process_answer(question: str, answer: str, cue_id: str | None = None)
         return {"ok": True, "question": question, "answer": answer, "insight": None, "rejected": True, "off_record": True}
     qa = None if note else _close_pending_question(answer, cue_id)
     if qa and cue_id and qa.get("cue_id") == cue_id:
-        question = qa["question"]  # the agent's own wording, registered by /agent/asked
+        question = question.strip() or qa["question"]  # the agent's own wording, with its follow-ups
+        _agent_choice(qa, slot)
     elif not qa or qa["question"] != question:
         qa = {}  # no matching question: the knowledge manager picks the slot
     measured_task, measured = _measured(qa)
@@ -125,8 +136,9 @@ async def _process_answer(question: str, answer: str, cue_id: str | None = None)
     if note:  # the observer sees it, so it won't ask about what the pilot just explained
         runtime.qa_history.append({"t": t, "question": None, "answer": answer, "slot": result.get("slot"), "kind": "note"})
 
-    # One follow-up per question or note, asked by the observer loop at the next calm moment
-    if result.get("follow_up") and qa.get("kind") != "follow_up" and runtime.session_active:
+    # One follow-up per question or note, asked by the observer loop at the next calm moment. The
+    # ElevenLabs agent asks its own follow-ups and decides when it has understood enough: none from here.
+    if result.get("follow_up") and qa.get("kind") != "follow_up" and runtime.session_active and not cue_id:
         runtime.pending_follow_up = {"t": runtime.drone.elapsed_time, "question": result["follow_up"],
                                      "slot": result.get("slot") or qa.get("slot")}
     else:
@@ -149,7 +161,7 @@ async def _process_answer(question: str, answer: str, cue_id: str | None = None)
 async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
     if not payload.answer.strip():
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
-    return await _process_answer(payload.question, payload.answer, payload.cue_id)
+    return await _process_answer(payload.question, payload.answer, payload.cue_id, payload.slot)
 
 
 def _transcribe(audio: bytes, content_type: str) -> str:
@@ -223,9 +235,10 @@ async def receive_voice_answer(request: Request, question: str = "") -> dict[str
 
 
 @router.post("/dialogue/skip")
-async def skip_question() -> dict[str, Any]:
-    """Pilot skipped the question (Esc) or said nothing: let the observer move on."""
-    _close_pending_question("(no answer)")
+async def skip_question(declined: bool = False) -> dict[str, Any]:
+    """Pilot skipped the question (Esc) or said nothing: let the observer move on. declined: the
+    ElevenLabs agent judged the moment not worth a question (nothing was asked)."""
+    _close_pending_question("(not asked)" if declined else "(no answer)")
     return {"ok": True}
 
 
