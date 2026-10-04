@@ -33,6 +33,8 @@ async def session_start(payload: StartSessionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Mode must be 'expert' or 'novice'")
     runtime.reset(mode=mode)
     runtime.recorder = start_session(mode)
+    # Ground truth for the flight summary / comparison: which defects existed on this flight
+    runtime.recorder.record_event({"type": "defects_placed", "t": 0.0, "defects": runtime.scene.defects})
     return {
         "session_id": runtime.recorder.session_id,
         "mode": mode,

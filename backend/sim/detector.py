@@ -4,8 +4,9 @@ from collections import deque
 from typing import Any
 import numpy as np
 
+from backend.sim.defects import SPOT_DWELL_S, can_see
 from backend.sim.drone import DroneSim
-from backend.sim.scene import Scene, inside_tree, nearest_cable_point
+from backend.sim.scene import Scene, nearest_cable_point
 
 
 class EventDetector:
@@ -23,6 +24,9 @@ class EventDetector:
         self.insulator_hover_time: dict[str, float] = {}
         self.recent_speeds: deque[tuple[float, float]] = deque()
         self.prev_braked = False
+        self.prev_compass = False
+        self.defects_spotted: list[str] = []
+        self.defect_view_time: dict[str, float] = {}
 
     def reset(self) -> None:
         self.prev_hover = False
@@ -37,6 +41,9 @@ class EventDetector:
         self.insulator_hover_time.clear()
         self.recent_speeds.clear()
         self.prev_braked = False
+        self.prev_compass = False
+        self.defects_spotted.clear()
+        self.defect_view_time.clear()
 
     def update(self, drone: DroneSim, dt: float) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -127,6 +134,26 @@ class EventDetector:
                 # Reset dwell time if pilot leaves
                 self.insulator_hover_time[ins_id] = max(0.0, self.insulator_hover_time.get(ins_id, 0.0) - dt * 0.5)
 
+        # Defects: spotted after holding one in the camera view, close and slow
+        for d in self.scene.defects:
+            if d["id"] in self.defects_spotted:
+                continue
+            visible, dist = can_see(d, pos, drone.yaw, speed)
+            seen = self.defect_view_time.get(d["id"], 0.0)
+            seen = seen + dt if visible else max(0.0, seen - dt)
+            self.defect_view_time[d["id"]] = seen
+            if seen >= SPOT_DWELL_S and not drone.collided:
+                self.defects_spotted.append(d["id"])
+                events.append({
+                    "type": "defect_spotted",
+                    "t": t,
+                    "defect_id": d["id"],
+                    "kind": d["kind"],
+                    "label": d["label"],
+                    "target": d["target"],
+                    "distance": round(dist, 2),
+                })
+
         if len(self.inspected) == len(self.scene.insulators) and not self.mission_complete_sent:
             self.mission_complete_sent = True
             events.append({"type": "mission_complete", "t": t})
@@ -134,7 +161,18 @@ class EventDetector:
         # Collision detection
         if drone.collided and not self.collision_sent:
             self.collision_sent = True
-            events.append({"type": "collision", "t": t, "pos": pos.tolist(), "cable_dist": round(cable_dist, 2)})
+            events.append({
+                "type": "collision",
+                "t": t,
+                "pos": pos.tolist(),
+                "with": drone.collision_with,
+                "cable_dist": round(cable_dist, 2),
+            })
+
+        compass = drone.compass_interference > 0.3
+        if compass and not self.prev_compass:
+            events.append({"type": "compass_interference", "t": t, "cable_dist": round(cable_dist, 2)})
+        self.prev_compass = compass
 
         self.prev_hover = hover
         self.prev_over_road = over_road

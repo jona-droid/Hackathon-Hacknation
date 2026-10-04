@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.api.ws import broadcast
 from backend.core.config import (
+    OBSERVER_FRAME_MAX_AGE_S,
     OBSERVER_INTERVAL_S,
     OBSERVER_WINDOW_S,
     QUESTION_COOLDOWN_S,
@@ -42,7 +43,13 @@ async def observe_once(force: bool = False) -> dict[str, Any] | None:
     runtime.observer_busy = True
     try:
         flight = runtime.flight_log.observer_context(OBSERVER_WINDOW_S)
-        decision = await runtime.observer.decide(flight, runtime.qa_history, force=force)
+        frame = runtime.camera.get_latest_frame()
+        frame_age = runtime.drone.elapsed_time - runtime.camera.latest_timestamp
+        if frame and not 0 <= frame_age <= OBSERVER_FRAME_MAX_AGE_S:
+            frame = None  # stale (or from a previous flight): it would contradict the telemetry
+        decision = await runtime.observer.decide(
+            flight, runtime.qa_history, force=force, frame_b64=frame, frame_age_s=frame_age
+        )
     finally:
         runtime.observer_busy = False
 

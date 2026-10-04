@@ -18,6 +18,7 @@ import numpy as np
 COLUMNS = (
     "t", "x", "y", "z", "speed", "vz", "acc", "heading_deg",
     "cable_dist", "cable_dz", "pylon_dist", "tree_dist", "insulator_dist", "road_dist",
+    "wind_speed", "compass_interference",
 )
 
 REVISIT_RADIUS_M = 4.0
@@ -35,12 +36,14 @@ class FlightLog:
     rows: list[tuple[float, ...]] = field(default_factory=list)
     insulators: list[str] = field(default_factory=list)  # nearest insulator per row
     events: list[dict[str, Any]] = field(default_factory=list)
+    conditions: dict[str, Any] = field(default_factory=dict)
     _last_t: float = -1e9
 
     def reset(self) -> None:
         self.rows.clear()
         self.insulators.clear()
         self.events.clear()
+        self.conditions = {}
         self._last_t = -1e9
 
     def record(self, state: dict[str, Any]) -> None:
@@ -55,7 +58,14 @@ class FlightLog:
             t, x, y, z, state["speed"], state["vertical_speed"], state["acc_magnitude"], state["heading_deg"],
             state["cable_dist"], state["cable_dz"], state["pylon_dist"], state["tree_dist"],
             state["insulator_dist"], state["road_dist"],
+            state["wind_speed"], state["compass_interference"],
         ))
+        self.conditions = {
+            "wind_from_deg": state["wind_from_deg"],
+            "wind_speed_here": state["wind_speed"],
+            "drone_upwind_of_nearest_cable": _upwind_of_cable(state),
+            "position_hold": state["position_hold"],
+        }
         self.insulators.append(state["nearest_insulator"])
 
     def record_event(self, event: dict[str, Any]) -> None:
@@ -81,6 +91,7 @@ class FlightLog:
 
         return {
             "flight_time_s": round(t_now, 1),
+            "conditions_now": self.conditions,
             "last_window": {
                 "seconds": window_s,
                 "columns": list(COLUMNS),
@@ -93,6 +104,10 @@ class FlightLog:
                 "revisit": _revisit(data),
                 "circling": _circling(data),
                 "insulators_approached": _insulators_approached(data, self.insulators),
+                "defects_spotted": [
+                    {"t": round(float(e["t"]), 1), "defect": e["label"], "on": e["target"]}
+                    for e in self.events if e.get("type") == "defect_spotted"
+                ],
                 "path_overview": _overview(data),
                 "earlier_events": [
                     {"t": round(float(e.get("t", 0.0)), 1), "type": e.get("type")}
@@ -100,6 +115,15 @@ class FlightLog:
                 ][-25:],
             },
         }
+
+
+def _upwind_of_cable(state: dict[str, Any]) -> bool | None:
+    """True if the wind blows from the drone towards the nearest cable (a gust pushes it into the line)."""
+    wind = np.asarray(state["wind"][:2], dtype=float)
+    if state["cable_dist"] > 15.0 or np.linalg.norm(wind) < 0.5:
+        return None
+    to_cable = np.asarray(state["nearest_cable_point"][:2], dtype=float) - np.asarray(state["pos"][:2], dtype=float)
+    return bool(np.dot(wind, to_cable) > 0)
 
 
 def _compact_event(e: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +154,7 @@ def _window_stats(win: np.ndarray) -> dict[str, Any]:
         "min_pylon_dist": round(float(win[:, _col("pylon_dist")].min()), 2),
         "min_tree_dist": round(float(win[:, _col("tree_dist")].min()), 2),
         "min_insulator_dist": round(float(win[:, _col("insulator_dist")].min()), 2),
+        "max_compass_interference": round(float(win[:, _col("compass_interference")].max()), 2),
     }
 
 

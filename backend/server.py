@@ -84,6 +84,7 @@ async def sim_loop() -> None:
             state = runtime.drone.snapshot()
             state["mode"] = runtime.mode
             state["inspected_count"] = len(runtime.detector.inspected)
+            state["defects_spotted"] = list(runtime.detector.defects_spotted)
             runtime.flight_log.record(state)
 
             for ev in events:

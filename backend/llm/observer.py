@@ -1,4 +1,4 @@
-"""Telemetry-only LLM observer that decides when to ask the expert pilot a question."""
+"""LLM observer (telemetry + latest camera frame) that decides when to ask the expert pilot a question."""
 
 from __future__ import annotations
 
@@ -43,11 +43,13 @@ class FlightObserver:
         flight: dict[str, Any],
         qa_history: list[dict[str, Any]],
         force: bool = False,
+        frame_b64: str | None = None,
+        frame_age_s: float | None = None,
     ) -> ObserverDecision:
         if self._client is None:
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-        prompt = (
+        text = (
             f"<knowledge_already_captured>\n{get_knowledge()[-1500:]}\n</knowledge_already_captured>\n\n"
             f"<recent_questions_and_answers>\n{json.dumps(qa_history[-6:], ensure_ascii=False)}\n</recent_questions_and_answers>\n\n"
             f"<telemetry>\n{json.dumps(flight, separators=(',', ':'))}\n</telemetry>\n\n"
@@ -58,11 +60,22 @@ class FlightObserver:
             )
         )
 
+        content: list[dict[str, Any]] = []
+        if frame_b64:
+            content.append({"type": "text", "text": f"Camera frame, captured {frame_age_s or 0:.1f} s ago:"})
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": frame_b64},
+            })
+        else:
+            text += "\n\nNo camera frame is available right now: rely on telemetry only."
+        content.append({"type": "text", "text": text})
+
         response = await self._client.messages.parse(
             model=self.model,
             max_tokens=400,
             system=self.system_prompt,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content}],
             output_format=ObserverDecision,
         )
         if response.stop_reason in ("max_tokens", "refusal") or response.parsed_output is None:
@@ -73,8 +86,9 @@ class FlightObserver:
         if not decision.question:
             decision.ask_question = False
         logger.info(
-            "observer: ask=%s in=%d out=%d | %s",
+            "observer: ask=%s frame=%s in=%d out=%d | %s",
             decision.ask_question,
+            frame_b64 is not None,
             response.usage.input_tokens,
             response.usage.output_tokens,
             decision.question or decision.observation,

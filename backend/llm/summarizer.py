@@ -34,8 +34,14 @@ def _compute_metrics(session_id: str) -> dict[str, Any]:
 
     inspected_set: set[str] = set()
     violations: list[str] = []
+    defects_present: list[dict[str, Any]] = []
+    defects_found: list[str] = []
 
     for ev in events:
+        if ev.get("type") == "defects_placed":
+            defects_present = ev.get("defects", [])
+        if ev.get("type") == "defect_spotted":
+            defects_found.append(str(ev.get("defect_id")))
         if ev.get("type") == "insulator_inspected":
             inspected_set.add(str(ev.get("insulator_id", "")))
         if ev.get("type") == "very_close_cable":
@@ -63,6 +69,8 @@ def _compute_metrics(session_id: str) -> dict[str, Any]:
         "safety_violations_count": len(violations),
         "max_speed_recorded": round(max_speed, 2),
         "hover_stability_score": 8.5 if len(violations) == 0 else 6.0,
+        "defects_found": [f"{d['label']} ({d['target']})" for d in defects_present if d["id"] in defects_found],
+        "defects_missed": [f"{d['label']} ({d['target']})" for d in defects_present if d["id"] not in defects_found],
         "events_count": len(events),
         "transcript_count": len(transcript),
         "telemetry_samples": len(telemetry),
@@ -122,6 +130,10 @@ class FlightSummarizer:
                     f"Inspection flight deemed {'successful and compliant' if viols == 0 else 'satisfactory with safety warnings'}."
                 ),
             }
+
+        # Defect findings are ground truth: never let the LLM rewrite them
+        summary_json["defects_found"] = metrics["defects_found"]
+        summary_json["defects_missed"] = metrics["defects_missed"]
 
         # Save to disk
         (root / "summary.json").write_text(

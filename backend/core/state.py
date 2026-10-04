@@ -10,6 +10,7 @@ from backend.llm.knowledge_manager import KnowledgeManager
 from backend.llm.observer import FlightObserver
 from backend.llm.summarizer import FlightSummarizer
 from backend.sim.camera import CameraManager
+from backend.sim.defects import generate_defects
 from backend.sim.detector import EventDetector
 from backend.sim.drone import DroneSim
 from backend.sim.flight_log import FlightLog
@@ -48,6 +49,7 @@ class SimRuntime:
     session_epoch: int = 0
 
     def __post_init__(self) -> None:
+        self.scene.defects = generate_defects(self.scene)
         self.drone = DroneSim(self.scene)
         self.detector = EventDetector(self.scene)
 
@@ -66,6 +68,7 @@ class SimRuntime:
     def reset(self, mode: str = "expert") -> None:
         self.session_epoch += 1
         self.mode = mode
+        self.scene.defects = generate_defects(self.scene)  # new damage to find on every flight
         self.keys_down.clear()
         self.drone.reset()
         self.detector.reset()
