@@ -5,7 +5,7 @@ const X_MAX = 145;
 const Y_HALF = 25;
 
 // Top-down overview; SVG y grows downward, world y grows left of the line, so flip it.
-export function MiniMap({ scene, pos, yaw, inspected }: { scene: SceneData | null; pos: number[]; yaw: number; inspected: Set<string> }) {
+export function MiniMap({ scene, pos, yaw, inspected, trail }: { scene: SceneData | null; pos: number[]; yaw: number; inspected: Set<string>; trail: number[][] }) {
   if (!scene) return null;
   const deg = (-yaw * 180) / Math.PI;
   return (
@@ -22,6 +22,19 @@ export function MiniMap({ scene, pos, yaw, inspected }: { scene: SceneData | nul
         <circle key={ins.id} cx={ins.pos[0]} cy={-ins.pos[1]} r={1.1} fill={inspected.has(ins.id) ? "#2ecc71" : "#1e90ff"} />
       ))}
       <circle cx={scene.tree.center[0]} cy={-scene.tree.center[1]} r={3} fill="forestgreen" />
+      {/* flight path since take-off, starting point marked */}
+      {trail.length > 1 && (
+        <polyline
+          points={trail.map((p) => `${p[0]},${-p[1]}`).join(" ")}
+          fill="none"
+          stroke="#ffb347"
+          strokeWidth={0.6}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          opacity={0.9}
+        />
+      )}
+      {trail.length > 0 && <circle cx={trail[0][0]} cy={-trail[0][1]} r={1.2} fill="#fff" stroke="#000" strokeWidth={0.3} />}
       <g transform={`translate(${pos[0]} ${-pos[1]}) rotate(${deg})`}>
         <polygon points="3,0 -2,-2 -2,2" fill="orange" stroke="#000" strokeWidth={0.3} />
       </g>

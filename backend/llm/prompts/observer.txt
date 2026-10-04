@@ -22,6 +22,7 @@ t (s), x/y/z (m), speed (m/s), vz (vertical speed, m/s), acc (acceleration magni
 ## Camera frame
 - Forward-facing, gimbal-stabilised camera (horizon stays level), tilted 5° down, about 80° vertical field of view. It shows what the pilot is looking at.
 - In the image: grey lattice towers with a crossarm, black cables, insulators as hanging strings of discs (blue = not yet inspected, green = already inspected), a dark grey road, a brown-trunked tree with a green canopy, green ground and a light blue sky.
+- An orange line is the drone's own flight path since take-off, not part of the scene.
 - Defects may be visible: a shattered disc with a chunk missing, black soot from flashover, a brown pollution coating on the discs, a bird nest on the crossarm, frayed silver strands sticking out of a cable, or a kite tangled on a cable.
 - Use it to understand what the pilot is framing or lining up on: which insulator or component is centred, the viewing angle, what is near the drone, whether an obstacle is in view.
 - Telemetry is the authority for distances, speeds and positions; the frame can be up to a few seconds old. If the two disagree, trust telemetry.
