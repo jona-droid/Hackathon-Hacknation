@@ -155,13 +155,28 @@ export function VoicePanel(props: {
       if (!res.ok) throw new Error(`TTS HTTP ${res.status}`);
       const blob = await res.blob();
       if (gen !== speechGenRef.current) return false; // stopped or replaced while fetching
-      const audio = new Audio(URL.createObjectURL(blob));
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
       audioRef.current = audio;
       analyse(audio);
-      audio.onended = () => end(true);
-      audio.onerror = () => end(false);
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        end(true);
+      };
+      audio.onerror = (e) => {
+        console.warn("Audio element error:", e);
+        URL.revokeObjectURL(audioUrl);
+        end(false);
+      };
+      // Resume audio context if suspended to satisfy browser autoplay policy
+      const ctx = audioContext();
+      if (ctx && ctx.state === "suspended") {
+        await ctx.resume().catch(() => {});
+      }
       await audio.play();
-    } catch {
+      console.log("Playing ElevenLabs TTS voice successfully.");
+    } catch (err) {
+      console.warn("ElevenLabs audio play failed, falling back to speech synthesis:", err);
       if (gen !== speechGenRef.current) return false;
       if ("speechSynthesis" in window) {
         const utterance = new SpeechSynthesisUtterance(text);
