@@ -50,6 +50,20 @@ PREDICT_QUESTIONS = {
     "tree": "Tree ahead. How much room would the expert give it, and why?",
     "defect": "You found {target}. What would the expert do with it now?",
 }
+SITUATION = {
+    "road": "The novice is approaching the road and will cross it soon.",
+    "insulator": "The novice is approaching insulator {target} to inspect it.",
+    "tower": "The novice is approaching a tower.",
+    "tree": "The novice is approaching a tree near the line.",
+    "defect": "The novice just found a defect: {target}.",
+}
+SITUATION_WHY = {
+    "road": "The novice was heading over the road too low; the warning stopped it.",
+    "cable": "The novice got dangerously close to a cable.",
+    "tower": "The novice was about to hit the tower; it was caught.",
+    "tree": "The novice was about to hit a tree; it was caught.",
+    "speed": "The novice was too fast to stop before an obstacle.",
+}
 WHY_QUESTIONS = {
     "road": "The expert would have climbed before that road. Why do you think?",
     "cable": "The expert would never get that close to the cable. Why do you think?",
@@ -136,9 +150,14 @@ def prediction_question(topic: str, target: str = "", why: bool = False) -> dict
     text = (WHY_QUESTIONS if why else PREDICT_QUESTIONS).get(topic)
     if not text:
         return None
-    slot, _ = found
+    slot, entry = found
+    said = competence_store.quote(entry)
     return {"topic": topic, "slot": slot, "slot_name": competence_store.slot_name(slot),
-            "kind": "why" if why else "predict", "question": text.format(target=target or "it")}
+            "kind": "why" if why else "predict", "question": text.format(target=target or "it"),
+            # for the ElevenLabs tutor, which words the question and judges the answer itself
+            "situation": (SITUATION_WHY if why else SITUATION).get(topic, topic).format(target=target or "it"),
+            "expert_rule": entry["rule"], "expert_conditions": entry.get("conditions") or [],
+            "reason": entry.get("reason", ""), "expert_words": said and said["text"]}
 
 
 class PredictionVerdict(BaseModel):

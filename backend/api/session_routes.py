@@ -20,6 +20,7 @@ router = APIRouter(tags=["Sessions"])
 
 class StartSessionRequest(BaseModel):
     mode: str = "expert"  # "expert" | "novice"
+    voice: str = "classic"  # "agent" = ElevenAgents words and speaks; "classic" = Claude + ElevenLabs TTS/STT
 
 
 class GuardianRequest(BaseModel):
@@ -36,13 +37,15 @@ async def session_start(payload: StartSessionRequest) -> dict[str, Any]:
     mode = payload.mode.lower()
     if mode not in {"expert", "novice", "tutor"}:
         raise HTTPException(status_code=400, detail="Mode must be 'expert' or 'novice'")
-    runtime.reset(mode=mode)
+    runtime.reset(mode=mode, voice_agent=payload.voice == "agent")
     runtime.recorder = start_session(mode)
+    runtime.recorder.update_meta(voice="elevenlabs_agent" if runtime.voice_agent else "classic")
     # Ground truth for the flight summary / comparison: which defects existed on this flight
     runtime.recorder.record_event({"type": "defects_placed", "t": 0.0, "defects": runtime.scene.defects})
     return {
         "session_id": runtime.recorder.session_id,
         "mode": mode,
+        "voice": "agent" if runtime.voice_agent else "classic",
         "message": f"Started {mode} flight session",
     }
 

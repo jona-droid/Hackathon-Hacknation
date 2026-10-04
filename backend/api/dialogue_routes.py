@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from backend.core.config import ELEVENLABS_API_KEY, ELEVENLABS_STT_MODEL, ELEVENLABS_VOICE_ID
-from backend.api.observer import observe_once
+from backend.api.observer import assess, cue_moment, observe_once
 from backend.api.ws import broadcast
 from backend.core.privacy import redact
 from backend.core.state import runtime
@@ -34,6 +34,7 @@ class AnswerRequest(BaseModel):
     question: str = ""  # empty: a note the pilot volunteered
     answer: str
     context: dict[str, Any] | None = None
+    cue_id: str | None = None  # ElevenAgents: the cue the agent asked about
 
 
 class AdviseRequest(BaseModel):
@@ -55,7 +56,7 @@ class TTSRequest(BaseModel):
 @router.post("/dialogue/trigger-question")
 async def trigger_question() -> dict[str, Any]:
     """Operator pressed "Ask Question Now": the observer must ask about the recent flight."""
-    if not runtime.observer.is_available:
+    if not runtime.voice_agent and not runtime.observer.is_available:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY is not configured on the server.")
     if not runtime.session_active:
         raise HTTPException(status_code=409, detail="No flight in progress: press Start Flight first.")
@@ -63,7 +64,11 @@ async def trigger_question() -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="Off the record: the apprentice is not asking anything.")
     if runtime.observer_busy:
         raise HTTPException(status_code=409, detail="The observer is already thinking; try again in a moment.")
-    payload = await observe_once(force=True)
+    if runtime.voice_agent:  # the ElevenLabs agent words it: no Claude call
+        t = runtime.drone.elapsed_time
+        payload = cue_moment(t, assess(t, force=True), force=True)
+    else:
+        payload = await observe_once(force=True)
     if payload is None:
         if not runtime.session_active:
             raise HTTPException(status_code=409, detail="The flight ended before the question was ready.")
@@ -71,10 +76,10 @@ async def trigger_question() -> dict[str, Any]:
     return payload
 
 
-def _close_pending_question(answer: str) -> dict[str, Any] | None:
-    """Record the answer on the latest unanswered question so the observer can ask again."""
+def _close_pending_question(answer: str, cue_id: str | None = None) -> dict[str, Any] | None:
+    """Record the answer on the latest unanswered question (or the one with that cue) so the observer can ask again."""
     for qa in reversed(runtime.qa_history):
-        if qa["answer"] is None:
+        if qa["answer"] is None and (cue_id is None or qa.get("cue_id") == cue_id):
             qa["answer"] = answer
             return qa
     return None
@@ -87,17 +92,19 @@ def _measured(qa: dict[str, Any]) -> tuple[str | None, dict[str, float]]:
     return (ep.task, ep.signature) if ep else (None, {})
 
 
-async def _process_answer(question: str, answer: str) -> dict[str, Any]:
+async def _process_answer(question: str, answer: str, cue_id: str | None = None) -> dict[str, Any]:
     """An answer to the apprentice's question, or (empty question) a note the pilot volunteered."""
     t = runtime.drone.elapsed_time
-    note = not question.strip()
+    note = not question.strip() and not cue_id
     answer = redact(answer)  # personal data never reaches the model or the files
     if runtime.off_record:
         if not note:
             _close_pending_question("(off the record)")
         return {"ok": True, "question": question, "answer": answer, "insight": None, "rejected": True, "off_record": True}
-    qa = None if note else _close_pending_question(answer)
-    if not qa or qa["question"] != question:
+    qa = None if note else _close_pending_question(answer, cue_id)
+    if qa and cue_id and qa.get("cue_id") == cue_id:
+        question = qa["question"]  # the agent's own wording, registered by /agent/asked
+    elif not qa or qa["question"] != question:
         qa = {}  # no matching question: the knowledge manager picks the slot
     measured_task, measured = _measured(qa)
 
@@ -142,7 +149,7 @@ async def _process_answer(question: str, answer: str) -> dict[str, Any]:
 async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
     if not payload.answer.strip():
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
-    return await _process_answer(payload.question, payload.answer)
+    return await _process_answer(payload.question, payload.answer, payload.cue_id)
 
 
 def _transcribe(audio: bytes, content_type: str) -> str:

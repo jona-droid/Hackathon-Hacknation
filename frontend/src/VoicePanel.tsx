@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AIAdvice, AIObservation, AIQuestion, Attention, ExpertMoment, PredictQuestion, Prediction } from "./useSimSocket";
+import { AIAdvice, AIObservation, AIQuestion, AgentContext, AgentCue, Attention, ExpertMoment, PredictQuestion, Prediction } from "./useSimSocket";
 import { API_URL } from "./config";
 import { AnswerRecording, NOTE_LIMITS, audioContext, beep, recordAnswer } from "./recordAnswer";
 import { VoiceActivity, startVoiceActivity } from "./voiceActivity";
+import { AgentHandlers, AgentStatus, VoiceAgent, stripTags } from "./voiceAgent";
 import { VoiceViz } from "./VoiceViz";
 
 type DebriefItem = {
@@ -17,6 +18,8 @@ type DebriefItem = {
   status: "pending" | "answered" | "skipped";
   answer?: string | null;
   learned?: string | null;
+  learn?: string;
+  hypothesis?: { text: string } | null;
 };
 type TeachBackState = {
   speech: string;
@@ -34,6 +37,20 @@ export type DebriefState = {
   teach_back: TeachBackState | null;
 };
 type Reply = { audio?: Blob; text?: string } | null;
+// ElevenAgents: a cue sent to the agent, waiting for the client tool that hands the answer back
+type AgentAsk = {
+  kind: "live" | "debrief" | "teachback" | "predict" | "note";
+  cueId?: string;
+  itemId?: number;
+  predictId?: string;
+  tag?: string;
+  ref?: string;
+  question: string; // the agent's first words after the cue
+  userText: string[]; // what the pilot said since, verbatim
+  resolve: (r: AgentAskResult) => void;
+};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AgentAskResult = { skipped?: boolean; timeout?: boolean; answer?: string; data?: any };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DEBRIEF_KIND: Record<string, string> = {
@@ -105,6 +122,9 @@ export function VoicePanel(props: {
   onReplay?: (m: ExpertMoment) => void;
   onDebriefDone?: (sessionId: string) => void;
   sendVoiceActivity?: (speaking: boolean) => void;
+  voice?: "agent" | "classic"; // agent = ElevenAgents words, speaks and listens
+  agentCue?: AgentCue | null;
+  agentContext?: AgentContext | null;
 }) {
   const {
     mode,
@@ -122,6 +142,9 @@ export function VoicePanel(props: {
     onReplay,
     onDebriefDone,
     sendVoiceActivity,
+    voice = "classic",
+    agentCue,
+    agentContext,
   } = props;
 
   const [transcript, setTranscript] = useState<TranscriptRow[]>([]);
@@ -254,6 +277,7 @@ export function VoicePanel(props: {
   };
 
   const voiceLevel = () => {
+    if (agentRef.current?.connected && !recordingRef.current) return agentRef.current.level();
     if (recordingRef.current) return recordingRef.current.level();
     const an = speakAnalyser.current;
     if (!an) return audioPlaying ? 0.25 + 0.25 * Math.random() : 0;
@@ -368,6 +392,257 @@ export function VoicePanel(props: {
     return data;
   };
 
+  // ---- ElevenAgents: the agent words, speaks and listens; the backend decides when and what ----
+  const agentRef = useRef<VoiceAgent | null>(null);
+  const handlersRef = useRef<AgentHandlers | null>(null);
+  if (!agentRef.current) agentRef.current = new VoiceAgent(() => handlersRef.current!);
+  const agent = agentRef.current;
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>("off");
+  const [agentSpeaking, setAgentSpeaking] = useState(false);
+  const [agentWaiting, setAgentWaiting] = useState<AgentAsk["kind"] | null>(null);
+  const [agentMicMuted, setAgentMicMuted] = useState(false);
+  const pendingRef = useRef<AgentAsk | null>(null);
+  const typedEchoRef = useRef("");
+  const nextTagRef = useRef<string | undefined>(undefined);
+  const debriefSidRef = useRef<string | null>(null);
+  const agentOn = voice === "agent" && agentStatus === "connected";
+  const agentOnRef = useRef(agentOn);
+  agentOnRef.current = agentOn;
+  const offRecordRef = useRef(offRecord);
+  offRecordRef.current = offRecord;
+
+  /** Send a cue and wait for the client tool that hands the answer back (or the timeout). */
+  const agentAsk = (meta: Omit<AgentAsk, "question" | "userText" | "resolve">, cue: [string, unknown] | null, timeoutMs: number) =>
+    new Promise<AgentAskResult>((resolve) => {
+      pendingRef.current?.resolve({ skipped: true }); // never two open at once
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const p: AgentAsk = {
+        ...meta,
+        question: "",
+        userText: [],
+        resolve: (r) => {
+          clearTimeout(timer);
+          if (pendingRef.current === p) {
+            pendingRef.current = null;
+            setAgentWaiting(null);
+          }
+          resolve(r);
+        },
+      };
+      pendingRef.current = p;
+      setAgentWaiting(meta.kind);
+      timer = setTimeout(() => p.resolve({ skipped: true, timeout: true }), timeoutMs);
+      if (cue) agent.cue(cue[0], cue[1]);
+    });
+
+  /** Something typed instead of said: shown, kept as the verbatim answer, and sent to the agent. */
+  const sayTyped = (text: string, tag = "Typed") => {
+    typedEchoRef.current = text;
+    pendingRef.current?.userText.push(text);
+    addRow({ role: "pilot", text, tag });
+    agent.say(text);
+  };
+
+  const showLearned = (r: AnswerResult & { off_record?: boolean }) => {
+    if (r.off_record) return;
+    if (r.insight) {
+      addRow({ role: "learned", text: r.insight, tag: r.slot_name ?? undefined });
+      onKnowledgeUpdated?.();
+    } else {
+      addRow({
+        role: "system",
+        text: r.error ? `Not saved: the knowledge model failed (${r.error}).` : r.follow_up ? "Not saved yet: too vague, a follow-up will come." : "Not saved: no usable know-how in that answer.",
+      });
+    }
+    if (r.insight && r.follow_up) addRow({ role: "system", text: "Saved; a follow-up question will make it more precise." });
+  };
+
+  /** Expert flight: close the microphone again once the agent has finished speaking. */
+  const muteWhenQuiet = async () => {
+    if (mode !== "expert") return;
+    await agent.quiet();
+    if (!pendingRef.current && agentOnRef.current && liveRef.current.sessionActive) agent.mute(true);
+  };
+
+  handlersRef.current = {
+    onAgentText: (raw) => {
+      const text = stripTags(raw);
+      if (!text) return;
+      const p = pendingRef.current;
+      const first = !!p && !p.question;
+      if (p && first) {
+        p.question = text;
+        if (p.kind === "live" && p.cueId) void post("/agent/asked", { cue_id: p.cueId, question: text }).catch(() => {});
+      }
+      const tag = first ? p?.tag : nextTagRef.current;
+      nextTagRef.current = undefined;
+      addRow({ role: mode === "expert" ? "ai" : "tutor", text, t: liveRef.current.sessionActive ? simTime : undefined, tag, ref: first ? p?.ref : undefined });
+    },
+    onUserText: (raw) => {
+      const text = raw.trim();
+      if (!text) return;
+      if (text === typedEchoRef.current) {
+        typedEchoRef.current = ""; // already shown when typed
+        return;
+      }
+      const p = pendingRef.current;
+      p?.userText.push(text);
+      const tag = !p ? undefined : { predict: "Your answer", teachback: "Teach-back reply", note: "Note", live: "Answer", debrief: "Answer" }[p.kind];
+      addRow({ role: "pilot", text, tag });
+    },
+    onMode: (speaking) => setAgentSpeaking(speaking),
+    onStatus: (st) => setAgentStatus(st),
+    tools: {
+      save_answer: async (params) => {
+        const p = pendingRef.current;
+        if (!p || (p.kind !== "live" && p.kind !== "debrief")) return "No question is open: say nothing.";
+        const said = p.userText.join(" ").trim() || String(params.answer ?? "").trim();
+        if (!said) {
+          p.resolve({ skipped: true });
+          return "Nothing was said: say nothing.";
+        }
+        setIsSubmitting(true);
+        try {
+          if (p.kind === "live") {
+            const data = await post("/dialogue/answer", { question: p.question, answer: said, cue_id: p.cueId });
+            showLearned(data);
+            p.resolve({ answer: said, data });
+            if (data.off_record) return "Off the record: say nothing.";
+            return data.insight ? "Saved. Say a two- or three-word thanks, nothing else." : "Noted. Say okay and nothing else.";
+          }
+          const data = await post(`/debrief/${debriefSidRef.current}/answer`, { item_id: p.itemId, answer: said, asked: p.question });
+          showLearned(data.result ?? {});
+          p.resolve({ answer: said, data });
+          return "Saved. Say a two- or three-word thanks, nothing else.";
+        } catch (err) {
+          p.resolve({ skipped: true });
+          addRow({ role: "system", text: `Could not save the answer: ${(err as Error)?.message ?? err}` });
+          return "Saving failed. Say sorry in three words.";
+        } finally {
+          setIsSubmitting(false);
+        }
+      },
+      skip_question: async () => {
+        pendingRef.current?.resolve({ skipped: true });
+        return "Skipped. Say nothing more.";
+      },
+      save_note: async (params) => {
+        const p = pendingRef.current;
+        const said = (p?.kind === "note" ? p.userText.join(" ").trim() : "") || String(params.note ?? "").trim();
+        if (!said) {
+          p?.resolve({ skipped: true });
+          return "Nothing to save: say nothing.";
+        }
+        setIsSubmitting(true);
+        try {
+          const data = await post("/dialogue/answer", { question: "", answer: said });
+          showLearned(data);
+          p?.resolve({ answer: said, data });
+          return data.off_record ? "Off the record: say nothing." : "Saved. Say: Noted.";
+        } finally {
+          setIsSubmitting(false);
+        }
+      },
+      teachback_verdict: async (params) => {
+        const p = pendingRef.current;
+        const sid = debriefSidRef.current;
+        if (!p || p.kind !== "teachback" || !sid) return "No teach-back is open: say nothing.";
+        const corrections = Array.isArray(params.corrections) ? params.corrections.map(String) : [];
+        setIsSubmitting(true);
+        try {
+          const data = await post(`/debrief/${sid}/teachback/verdict`, {
+            speech: p.question,
+            reply: p.userText.join(" "),
+            confirmed: !!params.confirmed,
+            corrections,
+          });
+          for (const c of data.corrected ?? []) {
+            if (c.learned) addRow({ role: "learned", text: c.learned, tag: c.slot_name ?? undefined });
+          }
+          if (data.corrected?.length) onKnowledgeUpdated?.();
+          p.resolve({ data });
+          return data.say;
+        } finally {
+          setIsSubmitting(false);
+        }
+      },
+      log_prediction: async (params) => {
+        const p = pendingRef.current;
+        if (!p || p.kind !== "predict") return "No question is open: say nothing.";
+        const answer = p.userText.join(" ").trim() || String(params.novice_answer ?? "");
+        const verdict = String(params.verdict ?? "wrong");
+        nextTagRef.current = VERDICT_LABEL[verdict] ?? "Feedback";
+        try {
+          const data = await post("/teach/agent-verdict", { id: p.predictId, verdict, answer });
+          if (data.replay) onReplay?.(data.replay);
+          p.resolve({ answer, data });
+        } catch {
+          p.resolve({ skipped: true });
+        }
+        return "Logged. Now give your feedback in at most 35 words, quoting the expert's words.";
+      },
+    },
+  };
+
+  /** Expert flight: the attention model chose the moment and the slot; the agent words the question. */
+  const agentLiveQuestion = async (q: AIQuestion) => {
+    if (pendingRef.current || !q.cue) return;
+    await waitForSilence();
+    if (!liveRef.current.sessionActive || offRecordRef.current || pendingRef.current) {
+      await post("/dialogue/skip").catch(() => {});
+      return;
+    }
+    agent.mute(false);
+    const r = await agentAsk(
+      { kind: "live", cueId: q.cue_id, tag: KIND_LABEL[q.kind ?? "rule"] ?? "Question", ref: q.slot_name ?? undefined },
+      ["ASK", q.cue],
+      60000
+    );
+    if (r.skipped) {
+      await post("/dialogue/skip").catch(() => {});
+      if (r.timeout) addRow({ role: "system", text: "No answer: the apprentice moves on." });
+    }
+    void muteWhenQuiet();
+  };
+
+  /** Expert flight: the pilot dictates a note to the agent. */
+  const agentNote = async () => {
+    if (pendingRef.current?.kind === "note" || offRecordRef.current) return;
+    await post("/dialogue/pilot-note?active=true").catch(() => {});
+    agent.mute(false);
+    const r = await agentAsk({ kind: "note", tag: "Note" }, ["NOTE", "The pilot pressed Record a note."], 90000);
+    await post("/dialogue/pilot-note?active=false").catch(() => {});
+    if (r.skipped) addRow({ role: "system", text: "Note discarded." });
+    void muteWhenQuiet();
+  };
+
+  /** Novice flight: the tutor agent asks what the expert would do, then judges the answer itself. */
+  const agentPrediction = async (q: PredictQuestion) => {
+    if (pendingRef.current) {
+      await post("/teach/predict-skip", { id: q.id }).catch(() => {});
+      return;
+    }
+    await waitForSilence(8000);
+    if (!liveRef.current.sessionActive) return;
+    const cue = {
+      situation: q.situation,
+      expert_rule: q.expert_rule,
+      expert_conditions: q.expert_conditions,
+      reason: q.reason,
+      expert_words: q.expert_words,
+      example_question: q.question,
+    };
+    const r = await agentAsk(
+      { kind: "predict", predictId: q.id, tag: q.kind === "why" ? "Why?" : "Predict", ref: q.slot_name },
+      [q.kind === "why" ? "WHY" : "PREDICT", cue],
+      45000
+    );
+    if (r.skipped) {
+      await post("/teach/predict-skip", { id: q.id }).catch(() => {});
+      if (r.timeout) addRow({ role: "system", text: "No answer: the tutor carries on." });
+    }
+  };
+
   /** Transcribe and learn from a recording; an empty question means the pilot's own note. */
   const sendVoice = async (audio: Blob, question: string) => {
     setIsSubmitting(true);
@@ -406,6 +681,7 @@ export function VoicePanel(props: {
 
   /** The pilot's own note, without a question. The apprentice holds its questions until it is sent. */
   const recordNote = async () => {
+    if (agentOnRef.current && liveRef.current.sessionActive) return agentNote();
     if (!liveRef.current.sessionActive || recordingRef.current || noteActiveRef.current) return;
     noteActiveRef.current = true;
     try {
@@ -444,6 +720,13 @@ export function VoicePanel(props: {
 
   /** Novice: ask the tutor out loud. Mic on until silence (Enter = send, Esc = cancel), then a spoken answer. */
   const askTutorByVoice = async () => {
+    if (agentOnRef.current) {
+      setAgentMicMuted((m) => {
+        agent.mute(!m);
+        return !m;
+      });
+      return;
+    }
     if (recordingRef.current || noteActiveRef.current) return;
     stopSpeaking(); // don't record the tutor's own voice
     const audio = await record("question");
@@ -514,19 +797,61 @@ export function VoicePanel(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [listening]);
 
-  // Question pushed by the observer
+  // Question pushed by the observer (a cue for the ElevenLabs agent, or a question worded by Claude)
   useEffect(() => {
-    if (latestQuestion?.question && latestQuestion.question !== lastQuestionRef.current) {
-      lastQuestionRef.current = latestQuestion.question;
-      // a question sent just before Record a note: the backend already dropped it
-      if (sessionActive && !noteActiveRef.current) {
-        askAndListen(latestQuestion.question, latestQuestion.t, {
-          slotName: latestQuestion.slot_name,
-          kind: latestQuestion.kind,
-        });
-      }
-    }
+    const q = latestQuestion;
+    if (!q?.question) return;
+    const key = q.cue_id ?? q.question;
+    if (key === lastQuestionRef.current) return;
+    lastQuestionRef.current = key;
+    // a question sent just before Record a note: the backend already dropped it
+    if (!sessionActive || noteActiveRef.current) return;
+    if (agentOnRef.current && q.cue) void agentLiveQuestion(q);
+    else askAndListen(q.question, q.t, { slotName: q.slot_name, kind: q.kind });
   }, [latestQuestion]);
+
+  // ---- ElevenAgents lifecycle: interviewer (expert, mic opened per question) or tutor (novice, always listening) ----
+  useEffect(() => {
+    if (voice !== "agent") return;
+    if (sessionActive) {
+      setAgentMicMuted(false);
+      void agent.start(mode === "expert" ? "interviewer" : "tutor", mode === "expert").then((ok) =>
+        addRow({
+          role: "system",
+          text: ok
+            ? mode === "expert"
+              ? "ElevenLabs apprentice connected: it words the questions and listens only when it asks."
+              : "ElevenLabs tutor connected: just talk to it."
+            : "ElevenLabs agent unavailable: the classic voice takes over.",
+        })
+      );
+    } else if (mode === "novice") {
+      pendingRef.current?.resolve({ skipped: true });
+      void agent.stop();
+    }
+  }, [sessionActive, voice]);
+  useEffect(() => () => void agentRef.current?.stop(), []);
+  // tutor tips and background status
+  useEffect(() => {
+    if (agentCue && agentOnRef.current && !pendingRef.current && liveRef.current.sessionActive) agent.cue("TIP", agentCue.cue);
+  }, [agentCue]);
+  useEffect(() => {
+    if (agentContext && agentOnRef.current) agent.context(agentContext.text);
+  }, [agentContext]);
+  // stick inputs = the pilot is busy (the "typing" of a flight): the agent's turn timer is reset
+  useEffect(() => {
+    if (voice !== "agent" || !sessionActive) return;
+    let last = 0;
+    const onKey = () => {
+      const now = Date.now();
+      if (now - last > 1000 && agentOnRef.current) {
+        last = now;
+        agent.activity();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [voice, sessionActive]);
 
   // Tutor advice (novice mode): spoken only. Compared by message, not text: a repeated alarm has the same words.
   useEffect(() => {
@@ -549,6 +874,14 @@ export function VoicePanel(props: {
         recordingRef.current.cancel(); // safety first: drop the question being recorded
       }
       const advice = latestAdvice;
+      if (agentOnRef.current) {
+        // safety alerts are never worded by an LLM: spoken as is, over the ducked agent
+        if (pendingRef.current?.kind === "predict") pendingRef.current.resolve({ skipped: true }); // the backend dropped it
+        agent.volume(0);
+        agent.context(`[ALERT already spoken to the pilot, do not repeat it] ${advice.speech}`);
+        void speakText(advice.speech).finally(() => agent.volume(1));
+        return;
+      }
       void (async () => {
         if (advice.urgency === "low") await waitForSilence(8000); // a tip waits for the pilot to finish talking
         if (lastAdviceRef.current === advice && liveRef.current.sessionActive) speakText(advice.speech);
@@ -578,8 +911,8 @@ export function VoicePanel(props: {
   }, [sessionActive]);
   // the AI's own voice and the answers being recorded are not "the pilot talking over"
   useEffect(() => {
-    vadRef.current?.setSuppressed(audioPlaying || recording !== null);
-  }, [audioPlaying, recording]);
+    vadRef.current?.setSuppressed(audioPlaying || recording !== null || agentSpeaking || agentWaiting !== null);
+  }, [audioPlaying, recording, agentSpeaking, agentWaiting]);
 
   // ---- novice: "what would the expert do here?" ----
   const askPrediction = async (q: PredictQuestion) => {
@@ -619,12 +952,18 @@ export function VoicePanel(props: {
     const q = latestPrediction;
     if (!q || q.id === lastPredictionRef.current) return;
     lastPredictionRef.current = q.id;
-    if (sessionActive && mode === "novice") void askPrediction(q);
+    if (sessionActive && mode === "novice") void (agentOnRef.current ? agentPrediction(q) : askPrediction(q));
   }, [latestPrediction]);
 
   // ---- expert: off the record ----
   const toggleOffRecord = async () => {
     const active = !offRecord;
+    if (agentOnRef.current) {
+      // the agent hears nothing off the record: the microphone is closed, an open question dropped
+      if (active) pendingRef.current?.resolve({ skipped: true });
+      agent.mute(true);
+      agent.context(active ? "[OFF_RECORD] The pilot went off the record." : "[ON_RECORD] The pilot is back on the record.");
+    }
     if (active) {
       stopSpeaking();
       recordingRef.current?.cancel();
@@ -648,6 +987,10 @@ export function VoicePanel(props: {
   // ---- expert: spoken debrief after the flight (gap questions, then the teach-back) ----
   const stopDebrief = () => {
     debriefGenRef.current += 1;
+    if (pendingRef.current?.kind === "debrief" || pendingRef.current?.kind === "teachback") {
+      pendingRef.current.resolve({ skipped: true });
+      agent.mute(true);
+    }
     typedReplyRef.current = null;
     listenAgainRef.current = null;
     recordingRef.current?.cancel();
@@ -707,7 +1050,105 @@ export function VoicePanel(props: {
     if (alive()) setDebrief(state);
   };
 
+  /** ElevenAgents: the interviewer agent words each gap question, then explains the process back and
+   * judges the expert's reply (teachback_verdict). The backend only chooses the gaps and stores the rules. */
+  const agentTeachBack = async (sid: string, alive: () => boolean, intro?: string) => {
+    setIsSubmitting(true);
+    let data;
+    try {
+      data = await post(`/debrief/${sid}/teachback/agent`);
+    } finally {
+      setIsSubmitting(false);
+    }
+    if (!alive()) return;
+    setDebrief(data.state);
+    let cue: [string, unknown] | null = ["TEACHBACK", { intro, steps: data.steps }];
+    for (let round = 0; alive() && round < 6; round++) {
+      const r = await agentAsk({ kind: "teachback", tag: round === 0 ? "Teach-back" : "Teach-back · corrected" }, cue, 240000);
+      cue = null; // later rounds: the agent continues from the tool result
+      if (!alive()) return;
+      if (!r.data?.state) {
+        addRow({ role: "system", text: "No reply heard: the debrief is paused. Resume it to hear the teach-back again." });
+        agent.mute(true);
+        return;
+      }
+      setDebrief(r.data.state);
+      if (r.data.state.phase === "done") {
+        onKnowledgeUpdated?.();
+        await agent.quiet(15000); // let it thank the pilot
+        if (alive()) {
+          onDebriefDone?.(sid);
+          void agent.stop();
+        }
+        return;
+      }
+    }
+  };
+
+  const runAgentDebrief = async (sid: string): Promise<boolean> => {
+    const gen = ++debriefGenRef.current;
+    const alive = () => gen === debriefGenRef.current;
+    debriefSidRef.current = sid;
+    setDebriefRunning(true);
+    try {
+      if (!(await agent.start("interviewer", false))) return false;
+      if (!alive()) return true;
+      agent.mute(false);
+      let state: DebriefState = await post(`/debrief/${sid}/start?agent=true`);
+      if (!alive()) return true;
+      setDebrief(state);
+      if (state.phase === "done") return true;
+      const resumed = state.items.some((i) => i.status !== "pending") || !!state.teach_back;
+      let intro: string | undefined = resumed ? "Let's finish the debrief." : state.intro;
+      while (alive()) {
+        state = debriefRef.current!;
+        if (state.phase === "questions") {
+          const item = state.items.find((i) => i.status === "pending");
+          if (!item) break;
+          const pos = state.items.findIndex((i) => i.id === item.id) + 1;
+          const cue = {
+            intro,
+            kind: item.kind,
+            why_now: [item.why],
+            learn: item.learn,
+            slot: item.slot_name,
+            example_question: item.question,
+            guardrail: item.guardrail,
+            observed_habit: item.hypothesis?.text,
+          };
+          intro = undefined;
+          const r = await agentAsk(
+            {
+              kind: "debrief",
+              itemId: item.id,
+              tag: `Debrief ${pos}/${state.items.length} · ${DEBRIEF_KIND[item.kind] ?? "Gap"}${item.guardrail ? " · guardrail" : ""}`,
+              ref: item.slot_name,
+            },
+            ["DEBRIEF_ASK", cue],
+            150000
+          );
+          if (!alive()) return true;
+          if (r.data?.state) setDebrief(r.data.state);
+          else {
+            const st = await post(`/debrief/${sid}/skip`, { item_id: item.id });
+            if (alive()) setDebrief(st);
+            if (r.timeout) addRow({ role: "system", text: "No answer: question skipped." });
+          }
+          continue;
+        }
+        if (state.phase === "teachback") await agentTeachBack(sid, alive, intro);
+        break;
+      }
+    } catch (err) {
+      if (alive()) addRow({ role: "system", text: `Debrief paused: ${(err as Error)?.message ?? err}` });
+    } finally {
+      if (gen === debriefGenRef.current) setDebriefRunning(false);
+    }
+    return true;
+  };
+
   const runDebrief = async (sid: string) => {
+    if (voice === "agent" && (await runAgentDebrief(sid))) return;
     const gen = ++debriefGenRef.current;
     const alive = () => gen === debriefGenRef.current;
     setDebriefRunning(true);
@@ -831,7 +1272,10 @@ export function VoicePanel(props: {
         return;
       }
       if (data.question && liveRef.current.sessionActive) {
-        askAndListen(data.question, data.t, { slotName: data.slot_name, kind: data.kind });
+        if (agentOnRef.current && data.cue) {
+          lastQuestionRef.current = data.cue_id;
+          void agentLiveQuestion(data);
+        } else askAndListen(data.question, data.t, { slotName: data.slot_name, kind: data.kind });
       }
     } catch (err) {
       console.error("Failed to trigger question:", err);
@@ -842,6 +1286,11 @@ export function VoicePanel(props: {
   const submitAnswer = async () => {
     const ans = answerInput.trim();
     if (!ans) return;
+    if (agentOnRef.current && pendingRef.current) {
+      sayTyped(ans); // the agent hands it back through its tool, like a spoken answer
+      setAnswerInput("");
+      return;
+    }
     if (typedReplyRef.current) {
       typedReplyRef.current(ans); // the debrief (or a prediction) is waiting for this answer
       setAnswerInput("");
@@ -876,6 +1325,10 @@ export function VoicePanel(props: {
     const query = noviceQueryInput.trim();
     if (!query) return;
     setNoviceQueryInput("");
+    if (agentOnRef.current) {
+      sayTyped(query, pendingRef.current ? "Your answer" : "Question"); // the tutor agent answers it
+      return;
+    }
     if (typedReplyRef.current) {
       typedReplyRef.current(query); // answering the tutor's "what would the expert do?"
       return;
@@ -905,7 +1358,10 @@ export function VoicePanel(props: {
   const showDebrief = mode === "expert" && !sessionActive && !!deb;
   if (!sessionActive && deb && mode === "expert") {
     const answered = deb.items.filter((i) => i.status !== "pending").length;
-    if (recording) status = { label: "Listening to you", orb: "", sub: "Enter = done · Esc = skip · or type it" };
+    if (agentSpeaking) status = { label: "Debrief", orb: "thinking", sub: deb.phase === "teachback" ? "Explaining it back to you." : "Asking." };
+    else if (agentWaiting === "teachback") status = { label: "Is that right?", orb: "", sub: "Say yes, or what to correct." };
+    else if (agentWaiting === "debrief") status = { label: "Listening to you", orb: "", sub: "Answer out loud, or type it." };
+    else if (recording) status = { label: "Listening to you", orb: "", sub: "Enter = done · Esc = skip · or type it" };
     else if (isSubmitting) status = { label: "Learning…", orb: "thinking", sub: "Turning your answer into a rule." };
     else if (audioPlaying) status = { label: "Debrief", orb: "thinking", sub: deb.phase === "teachback" ? "Explaining it back to you." : "Asking." };
     else if (deb.phase === "done") status = { label: "Debrief complete", orb: "", sub: tb?.confirmed ? "Teach-back confirmed. The Work Map is ready." : "Corrections saved. The Work Map is ready." };
@@ -921,9 +1377,16 @@ export function VoicePanel(props: {
     else if (recording === "answer" || recording === "reply") status = { label: "Listening to you", orb: "", sub: "Enter = done · Esc = skip" };
     else if (isSubmitting) status = { label: "Processing…", orb: "thinking", sub: "Transcribing and learning." };
     else if (audioPlaying) status = { label: "Speaking", orb: "thinking", sub: mode === "expert" ? "Question on air." : "Tutor on air." };
+    else if (agentSpeaking) status = { label: "Speaking", orb: "thinking", sub: mode === "expert" ? "The apprentice is asking." : "The tutor is talking." };
+    else if (agentWaiting === "live") status = { label: "Waiting for your answer", orb: "", sub: "Just answer out loud, or type it." };
+    else if (agentWaiting === "note") status = { label: "Listening to your note", orb: "", sub: "Speak your note; it is saved when you stop." };
+    else if (agentWaiting === "predict") status = { label: "Your turn", orb: "", sub: "What would the expert do here? Say it." };
     else if (offRecord && mode === "expert") status = { label: "Off the record", orb: "idle", sub: "Nothing is asked, seen or learned until you switch back." };
     else if (pilotTalking) status = { label: "Listening quietly", orb: "idle", sub: mode === "expert" ? "You are talking: the apprentice waits." : "You are talking: the tutor waits." };
-    else if (mode === "novice") status = { label: "Coaching", orb: "", sub: "Watching your flight with the expert's rules." };
+    else if (mode === "novice")
+      status = agentOn
+        ? { label: agentMicMuted ? "Coaching · mic off" : "Coaching", orb: "", sub: agentMicMuted ? "Press 🎙 to talk to the tutor again." : "Talk to the tutor any time." }
+        : { label: "Coaching", orb: "", sub: "Watching your flight with the expert's rules." };
     else if (a?.thinking) status = { label: "Thinking…", orb: "thinking", sub: "Composing a question for this moment." };
     else if (a?.waiting_answer) status = { label: "Waiting for your answer", orb: "", sub: "Speak or type it below." };
     else if (a?.follow_up) status = { label: "Follow-up queued", orb: "", sub: "Asked at the next calm moment." };
@@ -953,6 +1416,15 @@ export function VoicePanel(props: {
             <strong>{status.label}</strong>
             <span>{status.sub}</span>
           </div>
+          {voice === "agent" && (sessionActive || debriefRunning) && (
+            <span
+              className={`chip ${agentOn ? "ai" : agentStatus === "connecting" ? "warn" : "bad"}`}
+              title="The questions are worded, spoken and listened to by an ElevenLabs agent (ElevenAgents)"
+            >
+              <span className="dot" />
+              {agentOn ? "ElevenAgents" : agentStatus === "connecting" ? "Connecting…" : "Classic voice"}
+            </span>
+          )}
           {detailsAvailable && (
             <button className={`btn btn-sm btn-ghost ${showDetails ? "active" : ""}`} onClick={() => setShowDetails((v) => !v)}>
               Details
@@ -1037,9 +1509,14 @@ export function VoicePanel(props: {
           )}
           <div className="done-when">Done when {deb.done_when}.</div>
           <div className="row-actions">
-            {awaitingReply === "teachback" && (
+            {(awaitingReply === "teachback" || agentWaiting === "teachback") && (
               <>
-                <button className="btn btn-sm btn-primary" onClick={() => typedReplyRef.current?.("Yes, that is how I do it.")}>
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={() =>
+                    agentWaiting === "teachback" ? sayTyped("Yes, that is how I do it.") : typedReplyRef.current?.("Yes, that is how I do it.")
+                  }
+                >
                   ✓ Confirm
                 </button>
                 <button className="btn btn-sm" onClick={typeInstead}>
@@ -1048,7 +1525,13 @@ export function VoicePanel(props: {
               </>
             )}
             {debriefRunning ? (
-              <button className="btn btn-sm btn-ghost" onClick={stopDebrief}>
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  stopDebrief();
+                  void agent.stop(); // an open agent conversation is billed per minute: closed while paused
+                }}
+              >
                 Pause debrief
               </button>
             ) : deb.phase !== "done" ? (
@@ -1127,10 +1610,26 @@ export function VoicePanel(props: {
                 else void askTutorByVoice();
               }}
               disabled={listenAgainRef.current ? false : !sessionActive || isSubmitting || (mode === "expert" && offRecord)}
-              title={awaitingReply ? "Answer by voice" : mode === "expert" ? "Record a note (R)" : "Ask the tutor by voice (R)"}
+              title={
+                awaitingReply
+                  ? "Answer by voice"
+                  : mode === "expert"
+                    ? "Record a note (R)"
+                    : agentOn
+                      ? agentMicMuted
+                        ? "Turn the microphone on (R)"
+                        : "Turn the microphone off (R)"
+                      : "Ask the tutor by voice (R)"
+              }
+              style={agentOn && mode === "novice" && agentMicMuted ? { opacity: 0.5 } : undefined}
             >
               🎙
             </button>
+            {agentOn && (agentSpeaking || agentWaiting) && (
+              <div style={{ width: 70, flexShrink: 0 }}>
+                <VoiceViz mode={agentSpeaking ? "speaking" : "listening"} getLevel={voiceLevel} />
+              </div>
+            )}
             {mode === "expert" ? (
               <>
                 <input
@@ -1148,14 +1647,14 @@ export function VoicePanel(props: {
                           : "The debrief starts when a flight ends"
                   }
                   value={answerInput}
-                  disabled={!sessionActive && !awaitingReply}
+                  disabled={!sessionActive && !awaitingReply && !(agentOn && agentWaiting)}
                   onChange={(e) => setAnswerInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
                 />
                 <button
                   className="btn btn-primary"
                   onClick={() => submitAnswer()}
-                  disabled={isSubmitting || !answerInput.trim() || (!sessionActive && !awaitingReply)}
+                  disabled={isSubmitting || !answerInput.trim() || (!sessionActive && !awaitingReply && !(agentOn && agentWaiting))}
                 >
                   {isSubmitting ? "…" : "Send"}
                 </button>

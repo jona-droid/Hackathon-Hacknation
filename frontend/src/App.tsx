@@ -45,6 +45,7 @@ export function App() {
   const [guardianOn, setGuardianOn] = useState(true);
   const [replay, setReplay] = useState<ExpertMoment | null>(null); // the expert's moment shown when the tutor steps in
   const [workMapKey, setWorkMapKey] = useState(0);
+  const [voice, setVoice] = useState<"agent" | "classic">("classic"); // agent = ElevenAgents words and speaks
 
   const {
     state,
@@ -55,6 +56,8 @@ export function App() {
     attention,
     latestPrediction,
     offRecord,
+    agentCue,
+    agentContext,
     connected,
     sendKeys,
     sendFrame,
@@ -145,10 +148,17 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: guardianOn }),
       }).catch(() => {});
+      // ElevenAgents if the server can reach the agents (created on the first call), else the classic voice
+      const agentStatus = await fetch(`${API_URL}/agent/status`)
+        .then((r) => r.json())
+        .catch(() => ({ available: false }));
+      const v: "agent" | "classic" = agentStatus.available ? "agent" : "classic";
+      if (!agentStatus.available && agentStatus.reason) console.warn("ElevenAgents unavailable:", agentStatus.reason);
+      setVoice(v);
       const res = await fetch(`${API_URL}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, voice: v }),
       });
       const body = await res.json();
       setSessionId(body.session_id);
@@ -341,6 +351,9 @@ export function App() {
                 setTab("debrief");
               }}
               sendVoiceActivity={sendVoiceActivity}
+              voice={voice}
+              agentCue={agentCue}
+              agentContext={agentContext}
             />
             {tab === "knowledge" && <KnowledgeViewer refreshKey={kbRefreshKey} currentTask={state?.task} />}
             {tab === "debrief" && (

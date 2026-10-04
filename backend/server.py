@@ -9,7 +9,16 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api import debrief_router, dialogue_router, knowledge_router, session_router, teach_router, ws_router, broadcast
+from backend.api import (
+    agent_router,
+    broadcast,
+    debrief_router,
+    dialogue_router,
+    knowledge_router,
+    session_router,
+    teach_router,
+    ws_router,
+)
 from backend.api.observer import observer_loop
 from backend.core.config import (
     BROADCAST_HZ,
@@ -56,6 +65,7 @@ app.include_router(dialogue_router)
 app.include_router(knowledge_router)
 app.include_router(debrief_router)
 app.include_router(teach_router)
+app.include_router(agent_router)
 app.include_router(ws_router)
 
 
@@ -94,11 +104,29 @@ def _tutor_must_wait(t: float) -> bool:
     return runtime.open_prediction is not None or runtime.pilot_quiet_for(t) < QUIET_AFTER_SPEECH_S
 
 
+async def _agent_tip(ev: dict[str, Any] | None, telemetry: dict[str, Any], suggestion: str | None = None) -> None:
+    """ElevenAgents voice: the tutor agent words the tip itself (or stays silent); no Claude call."""
+    cue = {
+        "event": {k: v for k, v in (ev or {}).items() if not isinstance(v, (list, tuple))} or None,
+        "drone": {"height_m": round(telemetry["altitude"]), "speed_ms": round(telemetry["speed"], 1),
+                  "cable_m": round(telemetry["cable_dist"], 1), "road_m": round(telemetry["road_dist"])},
+        "mission": runtime.mission_context(),
+        "suggestion": suggestion,
+    }
+    cue["mission"]["remaining_insulators"] = cue["mission"]["remaining_insulators"][:2]
+    await broadcast({"type": "agent_cue", "role": "tutor", "kind": "tip", "cue": cue})
+
+
 async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) -> None:
     now = time.time()
     if ev.get("type") == "hover_start" and telemetry.get("insulator_dist", 99.0) > 8.0:
         return  # a pause away from the work: nothing to coach
     if _tutor_must_wait(telemetry["t"]):
+        return
+    if runtime.voice_agent:
+        if ev.get("type") in ADVICE_TRIGGER_EVENTS and now - runtime.last_advice_time > ADVICE_MIN_GAP_S:
+            runtime.last_advice_time = now
+            await _agent_tip(ev, telemetry)
         return
     if ev.get("type") in ADVICE_TRIGGER_EVENTS and (now - runtime.last_advice_time > ADVICE_MIN_GAP_S):
         runtime.last_advice_time = now
@@ -283,7 +311,11 @@ async def _sim_step(dt: float, tick: int, predict_every: int) -> tuple[dict[str,
         if (state["altitude"] > 0.4 and time.time() - runtime.last_advice_time > COACHING_IDLE_S
                 and not _tutor_must_wait(state["t"])):
             runtime.last_advice_time = time.time()
-            await _send_advice(coaching_hint(runtime.mission_context()), state["t"])
+            hint = coaching_hint(runtime.mission_context())
+            if runtime.voice_agent:
+                await _agent_tip(None, state, suggestion=hint["speech"])
+            else:
+                await _send_advice(hint, state["t"])
 
     if runtime.recorder:
         runtime.recorder.record_state(state["t"], state)

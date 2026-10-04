@@ -1,0 +1,38 @@
+{
+  "tools": {
+    "save_answer": {
+      "id": "tool_3601m431ndxdek2a5d75ck858exj",
+      "hash": "2562502701120b09"
+    },
+    "skip_question": {
+      "id": "tool_2601m431ne34f3ebcvy2yq4fsr4s",
+      "hash": "b0669acefb45c8b4"
+    },
+    "save_note": {
+      "id": "tool_4301m431ne7qf0rrdqmgmtn3290a",
+      "hash": "87933d8f9e0ba7f6"
+    },
+    "teachback_verdict": {
+      "id": "tool_4701m431necdf799j3cnrrabx604",
+      "hash": "a729f6a13e2fccba"
+    },
+    "log_prediction": {
+      "id": "tool_7101m431ng2revdanyg76wr21k38",
+      "hash": "802f5b0f7e4e45eb"
+    }
+  },
+  "agents": {
+    "interviewer": {
+      "agent_id": "agent_1301m431negte1wrcg8a1mkktmch",
+      "hash": "943f5acfe23d6955",
+      "llm": "qwen35-397b-a17b",
+      "tts_model": "eleven_v3_conversational"
+    },
+    "tutor": {
+      "agent_id": "agent_6001m431ng75em09fyeezz7ah6h1",
+      "hash": "e30787314ac27ec6",
+      "llm": "qwen35-397b-a17b",
+      "tts_model": "eleven_v3_conversational"
+    }
+  }
+}

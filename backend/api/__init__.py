@@ -3,6 +3,7 @@ from backend.api.dialogue_routes import router as dialogue_router
 from backend.api.knowledge_routes import router as knowledge_router
 from backend.api.debrief_routes import router as debrief_router
 from backend.api.teach_routes import router as teach_router
+from backend.api.agent_routes import router as agent_router
 from backend.api.ws import router as ws_router, broadcast
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "knowledge_router",
     "debrief_router",
     "teach_router",
+    "agent_router",
     "ws_router",
     "broadcast",
 ]

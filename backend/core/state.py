@@ -70,6 +70,9 @@ class SimRuntime:
     attention_last_try: dict[str, float] = field(default_factory=dict)
     attention: dict[str, Any] | None = None
     last_observer_call: float = -999.0
+    # the voice: True = ElevenAgents words and speaks the questions (llm/eleven_agents.py); False = Claude + TTS
+    voice_agent: bool = False
+    last_agent_context: float = -999.0  # sim time of the last [STATUS] sent to the tutor agent
     # the pilot is talking (browser voice-activity detection): the AI waits until they are silent
     pilot_speaking: bool = False
     pilot_speech_end: float = -999.0  # sim time the pilot last stopped talking
@@ -139,9 +142,11 @@ class SimRuntime:
         """Seconds since the pilot last spoke (0 while they are talking)."""
         return 0.0 if self.pilot_speaking else max(0.0, t - self.pilot_speech_end)
 
-    def reset(self, mode: str = "expert") -> None:
+    def reset(self, mode: str = "expert", voice_agent: bool = False) -> None:
         self.session_epoch += 1
         self.mode = mode
+        self.voice_agent = voice_agent
+        self.last_agent_context = -999.0
         self.scene.defects = generate_defects(self.scene)  # new damage to find on every flight
         self.keys_down.clear()
         self.drone.reset()

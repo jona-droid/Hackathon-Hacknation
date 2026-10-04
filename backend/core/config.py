@@ -13,6 +13,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_STT_MODEL = os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2")  # transcribes spoken answers
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Rachel default
+# ElevenAgents (the conversational voice of the apprentice and the tutor, llm/eleven_agents.py):
+# "elevenlabs" = the agents word and speak the questions; "off" = the older Claude + TTS/STT loop
+VOICE_AGENT = os.getenv("VOICE_AGENT", "elevenlabs").lower()  # "classic" = Claude words the questions
+ELEVENLABS_AGENT_LLM = os.getenv("ELEVENLABS_AGENT_LLM", "glm-52")  # hosted by ElevenLabs
+ELEVENLABS_AGENT_TTS_MODEL = os.getenv("ELEVENLABS_AGENT_TTS_MODEL", "eleven_v3_conversational")  # Expressive Mode
 
 # Storage Paths (ROBOT_APPRENTICE_DATA_DIR lets the tests work on a throw-away copy)
 DATA_DIR = Path(os.getenv("ROBOT_APPRENTICE_DATA_DIR", str(ROOT_DIR / "data")))

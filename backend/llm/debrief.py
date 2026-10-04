@@ -235,10 +235,11 @@ class DebriefAgent:
 
     # ---- 2. plan ---------------------------------------------------------------------
 
-    def start(self, session_id: str) -> dict[str, Any]:
+    def start(self, session_id: str, use_llm: bool = True) -> dict[str, Any]:
+        """use_llm=False (ElevenAgents voice): local choice, the agent words each question from its cue."""
         cands = gap_candidates(session_id)[:MAX_CANDIDATES]
         chosen: list[dict[str, Any]] = []
-        if cands and self.client.is_available:
+        if cands and use_llm and self.client.is_available:
             flight = load_flight(session_id)
             story = [{"task": ep.task, "from_s": round(ep.start), "for_s": round(ep.duration, 1), "measured": ep.signature}
                      for ep in (flight.episodes if flight else [])][-12:]
@@ -266,7 +267,7 @@ class DebriefAgent:
             chosen = [{**c, "question": c["example_question"]} for c in _pick(cands, DEBRIEF_MIN_QUESTIONS + 1)]
 
         items = [{
-            "id": i + 1, "slot": c["slot"], "slot_name": c["label"], "kind": c["kind"], "type": c["type"],
+            "id": i + 1, "slot": c["slot"], "slot_name": c["label"], "learn": c["learn"], "kind": c["kind"], "type": c["type"],
             "guardrail": c["type"] in GUARDRAIL_TYPES, "question": c["question"], "why": c["why"], "t": c["t"],
             "task": c["task"], "hypothesis": c.get("hypothesis"), "deviation": c.get("deviation"),
             "status": "pending", "answer": None, "learned": None,
@@ -288,13 +289,15 @@ class DebriefAgent:
 
     # ---- 3. answers -------------------------------------------------------------------
 
-    def answer(self, session_id: str, item_id: int, text: str) -> dict[str, Any]:
+    def answer(self, session_id: str, item_id: int, text: str, asked: str | None = None) -> dict[str, Any]:
         state = debrief_store.load(session_id)
         if not state:
             raise KeyError("no debrief for this session")
         item = next((it for it in state["items"] if it["id"] == item_id), None)
         if item is None:
             raise KeyError("unknown question")
+        if asked:
+            item["question"] = asked  # the voice agent's own words
         flight = load_flight(session_id)
         eps = [ep for ep in flight.episodes_of(item["task"])] if flight else []
         ep = max(eps, key=lambda e: e.duration) if eps else None
@@ -338,15 +341,34 @@ class DebriefAgent:
 
     # ---- 4. teach-back ----------------------------------------------------------------
 
-    def teach_back(self, session_id: str) -> dict[str, Any]:
-        state = debrief_store.load(session_id)
-        if not state:
-            raise KeyError("no debrief for this session")
+    @staticmethod
+    def teach_back_context(session_id: str) -> tuple[list[dict[str, Any]], set[str], dict[str, Any]]:
+        """The Work Map as the teach-back's material: steps, what was done, the rules of each."""
         wm = work_map.build(session_id) or {"steps": []}
         steps = [{"step": s["title"], "what_the_expert_did": s.get("decision"),
                   "rules": {r["slot"]: {"rule": r["rule"], "conditions": r["conditions"], "reason": r["reason"]} for r in s.get("rules", [])}}
                  for s in wm["steps"] if not s.get("off_record")]
         known = {r["slot"] for s in wm["steps"] for r in s.get("rules", [])}
+        return steps, known, wm
+
+    def teach_back_for_agent(self, session_id: str) -> dict[str, Any]:
+        """ElevenAgents voice: no LLM here, the agent explains the process back from these steps."""
+        state = debrief_store.load(session_id)
+        if not state:
+            raise KeyError("no debrief for this session")
+        steps, known, _ = self.teach_back_context(session_id)
+        slots = sorted(known)
+        state["phase"] = "teachback"
+        state["teach_back"] = {"speech": "", "slots": slots, "round": 1, "confirmed": False, "history": [],
+                               "all_slots": slots, "by": "elevenlabs_agent"}
+        debrief_store.save(state)
+        return {"state": state, "steps": steps}
+
+    def teach_back(self, session_id: str) -> dict[str, Any]:
+        state = debrief_store.load(session_id)
+        if not state:
+            raise KeyError("no debrief for this session")
+        steps, known, wm = self.teach_back_context(session_id)
         tb: TeachBack | None = None
         if self.client.is_available and steps:
             try:
@@ -362,6 +384,62 @@ class DebriefAgent:
                                "history": [{"speech": tb.speech.strip(), "reply": None}], "all_slots": slots}
         debrief_store.save(state)
         return state
+
+    def _apply_corrections(self, session_id: str, tb: dict[str, Any], reply: str, confirmed: bool,
+                           corrections: list[tuple[str | None, str]]) -> list[dict[str, Any]]:
+        """Each correction goes into its slot through the knowledge manager, like any answer."""
+        entries = competence_store.load()
+        corrected: list[dict[str, Any]] = []
+        for slot, text in corrections:
+            text = (text or "").strip()
+            if not text:
+                continue
+            slot = slot if slot in competence_store.SLOTS else _slot_named_in(text)
+            res = self.knowledge.process_operator_response(
+                question=f"Teach-back: {tb['speech']}", answer=text, target_slot=slot,
+                session=session_id, t=float((entries.get(slot or "", {}).get("learned_in") or {}).get("t", 0.0)), phase="teach-back")
+            corrected.append({"slot": res.get("slot") or slot, "slot_name": res.get("slot_name"), "said": text,
+                              "learned": res.get("insight")})
+        append_transcript(session_id, {"role": "expert_operator", "kind": "teachback_reply", "text": reply,
+                                       "confirmed": confirmed, "corrections": corrected})
+        tb.setdefault("corrections", []).extend(corrected)
+        return corrected
+
+    def teach_back_agent_verdict(self, session_id: str, speech: str, reply: str, confirmed: bool,
+                                 corrections: list[str]) -> dict[str, Any]:
+        """ElevenAgents voice: the agent explained the process back and judged the expert's reply
+        (teachback_verdict client tool). Returns what the agent must say next."""
+        state = debrief_store.load(session_id)
+        if not state or not state.get("teach_back"):
+            raise KeyError("no teach-back for this session")
+        tb = state["teach_back"]
+        if speech and not tb["speech"]:
+            tb["speech"] = speech
+        tb["history"].append({"speech": speech, "reply": reply})
+        corrected = self._apply_corrections(session_id, tb, reply, confirmed, [(None, c) for c in corrections])
+        fixed = [c for c in corrected if c["learned"] and c["slot"]]
+        tb["all_slots"] = sorted(set(tb["all_slots"]) | {c["slot"] for c in fixed})
+        entries = competence_store.load()
+        if confirmed:
+            tb["confirmed"] = True
+            state["phase"] = "done"
+            competence_store.mark_teachback(tb["all_slots"], session_id)
+            say = "Confirmed. Thank the pilot in one sentence and say the Work Map is ready for the next pilot."
+        elif tb["round"] >= TEACHBACK_MAX_ROUNDS:
+            state["phase"] = "done"
+            say = "The corrections are saved. Thank the pilot in one sentence and say the Work Map is ready."
+        elif fixed:
+            tb["round"] += 1
+            rules = " ".join(f"{competence_store.SLOTS[c['slot']]['label']}: {entries[c['slot']]['rule']}"
+                             for c in fixed if c["slot"] in entries)
+            say = (f"Corrections saved. Explain back only the corrected rules, in one or two sentences: {rules} "
+                   "Then ask whether that is right now; when the pilot replies, call teachback_verdict again.")
+        else:
+            tb["round"] += 1
+            say = ("Ask the pilot, in one short sentence, which part is wrong and what they do instead; "
+                   "when they reply, call teachback_verdict again.")
+        debrief_store.save(state)
+        return {"state": state, "corrected": corrected, "say": say}
 
     def teach_back_reply(self, session_id: str, reply: str) -> dict[str, Any]:
         state = debrief_store.load(session_id)
@@ -383,19 +461,8 @@ class DebriefAgent:
             confirmed = bool(YES.search(reply)) and not NO.search(reply)
             verdict = TeachBackVerdict(confirmed=confirmed, corrections=[] if confirmed else [Correction(slot="", correction=reply)])
 
-        corrected: list[dict[str, Any]] = []
-        for c in verdict.corrections:
-            if not c.correction.strip():
-                continue
-            slot = c.slot if c.slot in competence_store.SLOTS else None
-            res = self.knowledge.process_operator_response(
-                question=f"Teach-back: {tb['speech']}", answer=c.correction, target_slot=slot,
-                session=session_id, t=float((entries.get(slot or "", {}).get("learned_in") or {}).get("t", 0.0)), phase="teach-back")
-            corrected.append({"slot": res.get("slot") or slot, "slot_name": res.get("slot_name"), "said": c.correction,
-                              "learned": res.get("insight")})
-        append_transcript(session_id, {"role": "expert_operator", "kind": "teachback_reply", "text": reply,
-                                       "confirmed": verdict.confirmed, "corrections": corrected})
-        tb.setdefault("corrections", []).extend(corrected)
+        corrected = self._apply_corrections(session_id, tb, reply, verdict.confirmed,
+                                            [(c.slot, c.correction) for c in verdict.corrections])
 
         if verdict.confirmed and not corrected:
             tb["confirmed"] = True
@@ -419,6 +486,15 @@ class DebriefAgent:
             tb["history"].append({"speech": speech, "reply": None})
         debrief_store.save(state)
         return {"state": state, "verdict": verdict.model_dump(), "corrected": corrected}
+
+
+def _slot_named_in(text: str) -> str | None:
+    """The slot a correction names first ("road_crossing.crossing_rule: ..." or "Crossing rule: ...")."""
+    head = text.split(":", 1)[0].strip().lower()
+    for key, spec in competence_store.SLOTS.items():
+        if head in (key.lower(), spec["label"].lower()):
+            return key
+    return None
 
 
 def _local_teach_back(wm: dict[str, Any]) -> str:

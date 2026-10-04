@@ -25,12 +25,16 @@ from backend.core.config import (
     UNANSWERED_QUESTION_TIMEOUT_S,
 )
 from backend.core.state import runtime
+import uuid
+
 from backend.llm import attention
+from backend.sim.tasks import TASK_METRICS
 from backend.storage import competence_store, episode_store
 
 logger = logging.getLogger("robot-apprentice.observer")
 
 FOLLOW_UP_MAX_AGE_S = 60.0
+AGENT_CONTEXT_S = 10.0
 DEVIATION_MAX_AGE_S = 40.0
 PILOT_NOTE_MAX_S = 90.0  # a note recording the browser never closed stops blocking questions after this
 RETRY_DECLINED_S = 8.0  # the LLM said "not now": the same moment may be offered once more after this
@@ -80,6 +84,22 @@ def _calm() -> bool:
     s = runtime.drone.snapshot()
     risky = (runtime.flight_log.prediction or {}).get("risk") in ("medium", "high")
     return s["speed"] < 1.5 and min(s["cable_dist"], s["tree_dist"], s["pylon_dist"]) > 2.0 and not risky
+
+
+def tutor_status() -> str:
+    """[STATUS] for the tutor agent: where the novice is and what is left (background, never spoken)."""
+    s = runtime.drone.snapshot()
+    m = runtime.mission_context()
+    nxt = m["remaining_insulators"][0] if m["remaining_insulators"] else None
+    text = (f"[STATUS] Flight time {s['t']:.0f} s. Height {s['altitude']:.0f} m, speed {s['speed']:.1f} m/s, "
+            f"{s['cable_dist']:.0f} m from the nearest cable, {s['road_dist']:.0f} m from the road. "
+            f"Inspected: {', '.join(m['inspected']) or 'none'}. Defects found: {m['defects_spotted']}. ")
+    if nxt:
+        text += (f"Next: insulator {nxt['id']}, {nxt['distance_m']:.0f} m {nxt['direction']}, "
+                 f"{nxt['height_above_drone_m']:+.0f} m above the drone.")
+    else:
+        text += "All insulators are inspected: fly back and land."
+    return text
 
 
 def _session_id() -> str | None:
@@ -156,12 +176,36 @@ def _qa_for_prompt() -> list[dict[str, Any]]:
 
 # ---- asking ---------------------------------------------------------------------------
 
+def _agent_cue(question: str, slot: str | None, kind: str, reasons: list[str], ep: Any,
+               deviation: dict[str, Any] | None, hypothesis: dict[str, Any] | None) -> dict[str, Any]:
+    """What the ElevenLabs agent needs to word the question itself: why now, what to learn, the
+    measured evidence, an example. No LLM on our side."""
+    cue: dict[str, Any] = {"kind": kind, "why_now": reasons[:3], "example_question": question}
+    if slot:
+        spec = competence_store.SLOTS[slot]
+        cue.update({"slot": competence_store.slot_name(slot), "learn": spec["learn"]})
+        known = [competence_store.describe(k, e) for k, e in competence_store.load().items()
+                 if competence_store.SLOTS[k]["task"] == spec["task"]]
+        if known:
+            cue["known_rules"] = known[:3]
+    if ep is not None:
+        cue["measured"] = {m: ep.signature[m] for m in TASK_METRICS.get(ep.task, []) if m in ep.signature}
+    if hypothesis:
+        cue["observed_habit"] = hypothesis["text"]
+    if deviation:
+        cue["deviation"] = {k: deviation[k] for k in ("rule", "expected", "now") if k in deviation}
+    return cue
+
+
 def _push_question(t: float, question: str, slot: str | None, kind: str, observation: str,
-                   deviation: dict[str, Any] | None = None, hypothesis: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Register a question (for the answer to know its slot and episode) and build its payload."""
+                   deviation: dict[str, Any] | None = None, hypothesis: dict[str, Any] | None = None,
+                   reasons: list[str] | None = None) -> dict[str, Any]:
+    """Register a question (for the answer to know its slot and episode) and build its payload.
+    With the ElevenAgents voice, `question` is only an example: the agent words it (see /agent/asked)."""
     task = competence_store.SLOTS[slot]["task"] if slot else None
     ep = runtime.flight_log.latest_episode(task) if task else runtime.flight_log.current_episode()
     runtime.last_question_time = t
+    cue_id = uuid.uuid4().hex[:8]
     runtime.qa_history.append({
         "t": t,
         "question": question,
@@ -171,6 +215,7 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
         "deviation": deviation,
         "hypothesis": hypothesis,
         "episode": {"task": ep.task, "start": ep.start} if ep else None,
+        "cue_id": cue_id,
     })
     payload = {
         "question": question,
@@ -181,11 +226,42 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
         "event": {"type": kind, "t": t},
         "telemetry": runtime.drone.snapshot(),
         "t": t,
+        "cue_id": cue_id,
     }
+    if runtime.voice_agent:
+        payload["cue"] = _agent_cue(question, slot, kind, reasons or [observation], ep, deviation, hypothesis)
     runtime.latest_question = payload
-    if runtime.recorder:
+    if runtime.recorder and not runtime.voice_agent:  # the agent's own wording is recorded by /agent/asked
         runtime.recorder.record_transcript({"role": "apprentice_model", "text": question, "t": t, "slot": slot, "kind": kind})
     return payload
+
+
+def cue_moment(t: float, moment: attention.Moment | None, force: bool = False) -> dict[str, Any] | None:
+    """ElevenAgents voice: the attention model's choice becomes a cue for the agent, without calling
+    Claude. Preferred target: a deviation, then a habit to confirm, then the first open slot."""
+    if moment is None:
+        return None
+    targets = moment.targets
+    target = (next((tg for tg in targets if tg.kind == "deviation"), None)
+              or next((tg for tg in targets if tg.kind == "hypothesis"), None)
+              or (targets[0] if targets else None))
+    if target is None and not force:
+        return None
+    runtime.attention_consumed.add(moment.key)
+    runtime.last_observer_call = t
+    kind = target.kind if target else "rule"
+    dev = runtime.pending_deviation if kind == "deviation" else None
+    if kind == "deviation":
+        if dev is None:
+            kind = "rule"
+        runtime.pending_deviation = None
+    example = target.example_question if target else "What were you doing just now, and what should a novice know about it?"
+    observation = moment.reasons[0] if moment.reasons else "The pilot asked for a question."
+    if runtime.recorder:
+        runtime.recorder.record_observation({"t": t, "forced": force, "why_now": moment.reasons, "cue_for_agent": True,
+                                             "target_slot": target.slot if target else None, "kind": kind})
+    return _push_question(t, example, target.slot if target else None, kind, observation, deviation=dev,
+                          hypothesis=target.hypothesis if target else None, reasons=moment.reasons)
 
 
 def _ask_follow_up(t: float) -> dict[str, Any] | None:
@@ -279,6 +355,11 @@ async def observer_loop() -> None:
         await asyncio.sleep(OBSERVER_TICK_S)
         try:
             review_episodes()
+            if runtime.voice_agent and runtime.session_active and runtime.mode in ("novice", "tutor"):
+                t = runtime.drone.elapsed_time
+                if t - runtime.last_agent_context >= AGENT_CONTEXT_S:  # background for the tutor agent
+                    runtime.last_agent_context = t
+                    await broadcast({"type": "agent_context", "text": tutor_status()})
             if runtime.mode != "expert" or not runtime.session_active:
                 continue
             t = runtime.drone.elapsed_time
@@ -292,7 +373,16 @@ async def observer_loop() -> None:
             if runtime.pending_follow_up:
                 payload = _ask_follow_up(t)  # None while waiting for a calm moment
             elif (
-                runtime.observer.is_available
+                runtime.voice_agent
+                and not _pilot_busy()
+                and moment is not None
+                and moment.score >= attention.ASK_THRESHOLD
+                and t - runtime.last_observer_call >= OBSERVER_INTERVAL_S
+            ):
+                payload = cue_moment(t, moment)  # ElevenAgents words it: no Claude call
+            elif (
+                not runtime.voice_agent
+                and runtime.observer.is_available
                 and not _pilot_busy()
                 and moment is not None
                 and moment.score >= attention.ASK_THRESHOLD

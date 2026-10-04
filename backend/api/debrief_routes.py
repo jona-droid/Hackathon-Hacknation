@@ -25,6 +25,14 @@ _locks: dict[str, asyncio.Lock] = {}
 class DebriefAnswer(BaseModel):
     item_id: int
     answer: str
+    asked: str | None = None  # ElevenAgents: the agent's own wording of the question
+
+
+class TeachBackVerdict(BaseModel):
+    speech: str = ""  # what the agent explained back
+    reply: str = ""  # the expert's reply, verbatim
+    confirmed: bool
+    corrections: list[str] = []
 
 
 class ItemRef(BaseModel):
@@ -50,14 +58,15 @@ def _expert_session(session_id: str) -> None:
 
 
 @router.post("/debrief/{session_id}/start")
-async def debrief_start(session_id: str, restart: bool = False) -> dict[str, Any]:
-    """Plan the gap questions (or return the debrief already in progress)."""
+async def debrief_start(session_id: str, restart: bool = False, agent: bool = False) -> dict[str, Any]:
+    """Plan the gap questions (or return the debrief already in progress). agent=true: the ElevenLabs
+    agent words the questions, so they are chosen locally, without Claude."""
     _expert_session(session_id)
     async with _lock(session_id):
         state = debrief_store.load(session_id)
         if state and not restart:
             return state
-        return await asyncio.to_thread(runtime.debrief.start, session_id)
+        return await asyncio.to_thread(runtime.debrief.start, session_id, not agent)
 
 
 @router.get("/debrief/{session_id}")
@@ -68,10 +77,10 @@ async def debrief_get(session_id: str) -> dict[str, Any]:
     return state
 
 
-async def _answer(session_id: str, item_id: int, text: str) -> dict[str, Any]:
+async def _answer(session_id: str, item_id: int, text: str, asked: str | None = None) -> dict[str, Any]:
     async with _lock(session_id):
         try:
-            return await asyncio.to_thread(runtime.debrief.answer, session_id, item_id, redact(text))
+            return await asyncio.to_thread(runtime.debrief.answer, session_id, item_id, redact(text), asked)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
@@ -80,7 +89,7 @@ async def _answer(session_id: str, item_id: int, text: str) -> dict[str, Any]:
 async def debrief_answer(session_id: str, payload: DebriefAnswer) -> dict[str, Any]:
     if not payload.answer.strip():
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
-    return await _answer(session_id, payload.item_id, payload.answer)
+    return await _answer(session_id, payload.item_id, payload.answer, payload.asked)
 
 
 @router.post("/debrief/{session_id}/voice-answer")
@@ -131,6 +140,27 @@ async def debrief_teachback_voice_reply(session_id: str, request: Request) -> di
     if not transcript:
         return {"transcript": ""}
     return {"transcript": transcript, **await _reply(session_id, transcript)}
+
+
+@router.post("/debrief/{session_id}/teachback/agent")
+async def debrief_teachback_for_agent(session_id: str) -> dict[str, Any]:
+    """ElevenAgents voice: the steps and rules the agent explains back in its own words (no LLM here)."""
+    async with _lock(session_id):
+        try:
+            return await asyncio.to_thread(runtime.debrief.teach_back_for_agent, session_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/debrief/{session_id}/teachback/verdict")
+async def debrief_teachback_verdict(session_id: str, payload: TeachBackVerdict) -> dict[str, Any]:
+    """The agent's teachback_verdict tool: confirmed or not, the expert's corrections. Returns what to say next."""
+    async with _lock(session_id):
+        try:
+            return await asyncio.to_thread(runtime.debrief.teach_back_agent_verdict, session_id, payload.speech,
+                                           redact(payload.reply), payload.confirmed, [redact(c) for c in payload.corrections])
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/workmap/{session_id}")

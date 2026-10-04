@@ -71,7 +71,13 @@ export type AIQuestion = {
   event: SimEvent;
   telemetry: Partial<SimState>;
   t: number;
+  cue_id?: string;
+  cue?: Record<string, unknown>; // ElevenAgents: what the agent needs to word the question itself
 };
+
+/** For the tutor agent: a tip to word (or skip), or background status. */
+export type AgentCue = { role: "tutor"; kind: "tip"; cue: Record<string, unknown> };
+export type AgentContext = { text: string };
 
 export type AIObservation = { t: number; observation: string; asked: boolean };
 
@@ -121,6 +127,11 @@ export type PredictQuestion = {
   kind: "predict" | "why";
   question: string;
   t: number;
+  situation?: string;
+  expert_rule?: string;
+  expert_conditions?: string[];
+  reason?: string;
+  expert_words?: string | null;
 };
 
 export function useSimSocket() {
@@ -132,6 +143,8 @@ export function useSimSocket() {
   const [attention, setAttention] = useState<Attention | null>(null);
   const [latestPrediction, setLatestPrediction] = useState<PredictQuestion | null>(null);
   const [offRecord, setOffRecord] = useState(false);
+  const [agentCue, setAgentCue] = useState<AgentCue | null>(null);
+  const [agentContext, setAgentContext] = useState<AgentContext | null>(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -159,6 +172,8 @@ export function useSimSocket() {
           else if (data.type === "attention") setAttention(data);
           else if (data.type === "predict") setLatestPrediction(data);
           else if (data.type === "off_record") setOffRecord(!!data.active);
+          else if (data.type === "agent_cue") setAgentCue(data);
+          else if (data.type === "agent_context") setAgentContext(data);
         } catch (e) {
           console.error("WS parse error:", e);
         }
@@ -189,6 +204,8 @@ export function useSimSocket() {
       attention,
       latestPrediction,
       offRecord,
+      agentCue,
+      agentContext,
       connected,
       /** Voice-activity detection: the pilot started or stopped talking (nothing else is sent). */
       sendVoiceActivity: (speaking: boolean) => {
@@ -208,7 +225,7 @@ export function useSimSocket() {
         }
       },
     }),
-    [events, state, latestQuestion, latestAdvice, latestObservation, attention, latestPrediction, offRecord, connected]
+    [events, state, latestQuestion, latestAdvice, latestObservation, attention, latestPrediction, offRecord, agentCue, agentContext, connected]
   );
 
   return api;
