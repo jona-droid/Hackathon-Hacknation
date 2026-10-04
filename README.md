@@ -37,6 +37,7 @@ flowchart LR
   end
 
   subgraph CORE["Simulation & Autonomy Engine · FastAPI (:8000)"]
+    API["API Gateway · REST & WebSockets"]
     SIM["60 Hz Aerodynamic Sim<br/>Catenary Sag · Wind Gusts · EM Drift"]
     MPC["10 Hz Predictive Safety (MPC)<br/>14-State Rollout · Guardian Override"]
     ATTN["1 Hz Attention Scorer<br/>Salience Filter (Threshold ≥ 3.0)"]
@@ -48,11 +49,15 @@ flowchart LR
     ELEVEN["ElevenLabs Voice<br/>Flash v2.5 TTS · Scribe v2 STT"]
   end
 
-  HUD <-->|"WebSocket (30 Hz): Telemetry & Risk Vectors"| SIM
-  VOICE_UI <-->|"REST: Low-Latency Audio Streaming"| CORE
+  HUD <-->|"WebSocket (30 Hz): Telemetry & Risk"| API
+  API <--> SIM
+  VOICE_UI <-->|"REST: Low-Latency Audio Streaming"| API
+  SIM --> MPC
+  SIM --> ATTN
   ATTN -->|"Salient Moment (Prompt Caching -90%)"| CLAUDE
-  CORE -->|"Sub-Second Spoken Inquiry"| ELEVEN
-  CORE --> STORE
+  API -->|"Sub-Second Spoken Inquiry"| ELEVEN
+  API --> STORE
+  SIM --> STORE
 ```
 
 *For complete mathematical proofs, 14-state kinematic formulations, and sequence diagrams, refer to [PIPELINE.md](PIPELINE.md).*
