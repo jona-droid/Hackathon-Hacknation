@@ -30,23 +30,26 @@ This project is a drone inspection simulation with a FastAPI backend, a React/Vi
 │   ├── sim/
 │   │   ├── __init__.py
 │   │   ├── camera.py
+│   │   ├── defects.py
 │   │   ├── detector.py
-│   │   ├── flight_log.py
 │   │   ├── drone.py
-│   │   └── scene.py
+│   │   ├── flight_log.py
+│   │   ├── scene.py
+│   │   ├── tasks.py
+│   │   └── wind.py
 │   ├── storage/
 │   │   ├── __init__.py
 │   │   ├── comparison_store.py
+│   │   ├── competence_store.py
 │   │   ├── knowledge_store.py
 │   │   └── session_recorder.py
 │   ├── __init__.py
 │   ├── expert.py
-│   ├── flight.py
 │   ├── guardrails.py
 │   ├── recorder.py
 │   ├── requirements.txt
 │   ├── server.py
-│   └── sim.py
+│   └── workmap.py
 ├── data/
 │   ├── comparisons/
 │   ├── knowledge/
@@ -93,8 +96,8 @@ Key backend areas:
 
 1. Every simulation step, [backend/sim/drone.py](backend/sim/drone.py) snapshots position, speed, acceleration, heading and clearances (altitude, distance and height relative to the nearest cable, distance to the nearest pylon, tree, insulator and road).
 2. [backend/sim/flight_log.py](backend/sim/flight_log.py) keeps every sample since takeoff (10 Hz) and computes whole-flight patterns in Python: returning to an earlier position, flying in circles, insulators approached, and a coarse path overview. The same telemetry is also written to `data/sessions/<id>/telemetry.jsonl`.
-3. Every `OBSERVER_INTERVAL_S` (3 s), [backend/api/observer.py](backend/api/observer.py) sends the last `OBSERVER_WINDOW_S` (5 s) of telemetry, the whole-flight patterns, and the recent questions and answers to `OBSERVER_MODEL` (Claude Haiku 4.5). No images are sent. The prompt is in [backend/llm/prompts/observer.txt](backend/llm/prompts/observer.txt).
-4. Claude returns structured output `{observation, ask_question, question}`. When it asks, the exact question goes over the websocket and the frontend speaks it word for word through ElevenLabs text-to-speech (`/elevenlabs/tts`).
+3. Every `OBSERVER_INTERVAL_S` (3 s), [backend/api/observer.py](backend/api/observer.py) sends the last `OBSERVER_WINDOW_S` (5 s) of telemetry, the whole-flight patterns, the recent questions and answers, and the latest camera frame to `OBSERVER_MODEL` (Claude Haiku 4.5). The browser captures a frame from the 3D view every ~2 s; it is only sent if it is less than `OBSERVER_FRAME_MAX_AGE_S` (5 s) old, otherwise Claude relies on telemetry alone. The prompt is in [backend/llm/prompts/observer.txt](backend/llm/prompts/observer.txt).
+4. Claude returns structured output `{observation, ask_question, target_slot, question}`. When it asks, the exact question goes over the websocket and the frontend speaks it word for word through ElevenLabs text-to-speech (`/elevenlabs/tts`).
 5. When the question has been spoken, a beep sounds and the microphone opens for one answer only ([frontend/src/recordAnswer.ts](frontend/src/recordAnswer.ts)). It closes after 2 s of silence, after 8 s if nothing is said, or after 30 s at most. **Enter** finishes early and **Esc** skips. The mic is off the rest of the time. Permission is asked once, on **Start Flight**.
 6. The recording goes to `/dialogue/voice-answer`, ElevenLabs speech-to-text (`scribe_v2`) transcribes it in any language, and Claude Opus 5.5 turns it into an English entry in `knowledge.md`. Answers with no usable know-how (small talk, off-topic remarks) are rejected. Typed answers use `/dialogue/answer` and follow the same path.
 
