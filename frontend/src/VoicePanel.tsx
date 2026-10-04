@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { AIAdvice, AIObservation, AIQuestion, Attention, Guardian, Prediction } from "./useSimSocket";
+import { AIAdvice, AIObservation, AIQuestion, Attention, Prediction } from "./useSimSocket";
 import { API_URL } from "./config";
 import { AnswerRecording, NOTE_LIMITS, audioContext, beep, recordAnswer } from "./recordAnswer";
 import { VoiceViz } from "./VoiceViz";
 
 type Role = "ai" | "pilot" | "tutor" | "system" | "learned";
-type TranscriptRow = { role: Role; text: string; t?: number; tag?: string; high?: boolean };
+type TranscriptRow = { role: Role; text: string; t?: number; tag?: string; high?: boolean; ref?: string };
 type QuestionMeta = { slotName?: string | null; kind?: AIQuestion["kind"] };
 type AnswerResult = {
   insight?: string | null;
@@ -21,7 +21,7 @@ const KIND_LABEL: Record<string, string> = {
   deviation: "Rule check",
   follow_up: "Follow-up",
 };
-const ROLE_LABEL: Record<Role, string> = { ai: "Apprentice", pilot: "You", tutor: "Tutor", system: "System", learned: "Learned" };
+const ROLE_LABEL: Record<Role, string> = { ai: "Apprentice", pilot: "You", tutor: "Tutor", system: "System", learned: "✓ Rule learned" };
 
 function useTypewriter(text: string, charsPerSecond = 60): string {
   const [n, setN] = useState(0);
@@ -53,7 +53,6 @@ export function VoicePanel(props: {
   latestAdvice: AIAdvice | null;
   latestObservation?: AIObservation | null;
   attention?: Attention | null;
-  guardian?: Guardian;
   prediction?: Prediction | null;
   sessionActive: boolean;
   hidden?: boolean;
@@ -67,7 +66,6 @@ export function VoicePanel(props: {
     latestAdvice,
     latestObservation,
     attention,
-    guardian,
     sessionActive,
     hidden,
     onKnowledgeUpdated,
@@ -78,8 +76,7 @@ export function VoicePanel(props: {
   const [answerInput, setAnswerInput] = useState<string>("");
   const [noviceQueryInput, setNoviceQueryInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [lastSavedInsight, setLastSavedInsight] = useState<{ slot?: string | null; text: string } | null>(null);
-  const [currentMeta, setCurrentMeta] = useState<QuestionMeta>({});
+  const [showDetails, setShowDetails] = useState<boolean>(false);
   const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
   const [recording, setRecording] = useState<"answer" | "note" | "question" | null>(null); // what the open mic records
   const listening = recording !== null;
@@ -200,8 +197,7 @@ export function VoicePanel(props: {
           : "Not saved: no usable know-how in that answer.",
       });
     } else if (data.insight) {
-      setLastSavedInsight({ slot: data.slot_name, text: data.insight });
-      addRow({ role: "learned", text: `${data.slot_name ? `${data.slot_name} — ` : ""}${data.insight}` });
+      addRow({ role: "learned", text: data.insight, tag: data.slot_name ?? undefined });
       if (data.follow_up) addRow({ role: "system", text: "Saved; a follow-up question will make it more precise." });
       onKnowledgeUpdated?.();
     }
@@ -302,7 +298,7 @@ export function VoicePanel(props: {
   const showTutorAnswer = (query: string, advice: Partial<AIAdvice>) => {
     addRow({ role: "pilot", text: query, t: simTime, tag: "Question" });
     if (advice.speech) {
-      addRow({ role: "tutor", text: advice.speech, t: simTime, tag: "Answer" });
+      addRow({ role: "tutor", text: advice.speech, t: simTime, tag: "Answer", ref: advice.knowledge_reference ?? undefined });
       speakText(advice.speech);
     }
   };
@@ -345,7 +341,6 @@ export function VoicePanel(props: {
     lastQuestionRef.current = question;
     liveRef.current.currentQuestion = question;
     setCurrentQuestion(question);
-    setCurrentMeta(meta);
     addRow({ role: "ai", text: question, t, tag: KIND_LABEL[meta.kind ?? "rule"] ?? "Question" });
     const spoken = await speakText(question);
     if (spoken && mode === "expert" && liveRef.current.sessionActive && liveRef.current.currentQuestion === question) {
@@ -397,7 +392,14 @@ export function VoicePanel(props: {
     if (latestAdvice?.speech && latestAdvice !== lastAdviceRef.current) {
       lastAdviceRef.current = latestAdvice;
       if (!sessionActive) return;
-      addRow({ role: "tutor", text: latestAdvice.speech, t: simTime, tag: latestAdvice.category.replace("_", " "), high: latestAdvice.urgency === "high" });
+      addRow({
+        role: "tutor",
+        text: latestAdvice.speech,
+        t: simTime,
+        tag: latestAdvice.category.replace("_", " "),
+        high: latestAdvice.urgency === "high",
+        ref: latestAdvice.knowledge_reference ?? undefined,
+      });
       if (recordingRef.current) {
         if (latestAdvice.urgency !== "high") return; // shown, not spoken into the open mic
         recordingRef.current.cancel(); // safety first: drop the question being recorded
@@ -485,70 +487,78 @@ export function VoicePanel(props: {
   };
 
   // ---- view ----
-  const vizMode: "idle" | "speaking" | "listening" = listening ? "listening" : audioPlaying ? "speaking" : "idle";
-  const voiceLabel =
-    recording === "note"
-      ? "Recording note"
-      : recording === "question"
-        ? "Listening"
-        : recording === "answer"
-          ? "Your answer"
-          : isSubmitting
-            ? "Processing"
-            : audioPlaying
-              ? mode === "expert" ? "Apprentice" : "Tutor"
-              : "Voice idle";
-
-  let brain = { label: "Standby", orb: "idle", sub: "Start a flight: the apprentice watches and learns." };
-  if (sessionActive && mode === "expert") {
+  // one status line: the open mic and speech first, then what the apprentice is doing
+  let status = {
+    label: "Standby",
+    orb: "idle",
+    sub: mode === "expert" ? "Start a flight: the apprentice watches and learns." : "Start a flight: the tutor coaches you with the expert's rules.",
+  };
+  if (sessionActive) {
     const a = attention;
-    if (a?.thinking) brain = { label: "Thinking…", orb: "thinking", sub: "Composing a question for this moment." };
-    else if (recording === "answer") brain = { label: "Listening to you", orb: "", sub: "Enter = done · Esc = skip" };
-    else if (audioPlaying) brain = { label: "Speaking", orb: "", sub: "Question on air." };
-    else if (a?.waiting_answer) brain = { label: "Waiting for your answer", orb: "", sub: "Speak or type it below." };
-    else if (a?.follow_up) brain = { label: "Follow-up queued", orb: "", sub: "Asked at the next calm moment." };
-    else if (a?.cooldown_s) brain = { label: `Observing · ${a.cooldown_s}s`, orb: "", sub: "Letting you fly before the next question." };
-    else if (a?.ready) brain = { label: "Ready to ask", orb: "thinking", sub: "Something worth learning just happened." };
-    else brain = { label: "Observing", orb: "", sub: "Watching telemetry, camera and the 3-second forecast." };
+    if (recording === "note") status = { label: "Recording your note", orb: "", sub: "Enter = save · Esc = discard" };
+    else if (recording === "question") status = { label: "Listening to your question", orb: "", sub: "Enter = ask · Esc = cancel" };
+    else if (recording === "answer") status = { label: "Listening to you", orb: "", sub: "Enter = done · Esc = skip" };
+    else if (isSubmitting) status = { label: "Processing…", orb: "thinking", sub: "Transcribing and learning." };
+    else if (audioPlaying) status = { label: "Speaking", orb: "thinking", sub: mode === "expert" ? "Question on air." : "Tutor on air." };
+    else if (mode === "novice") status = { label: "Coaching", orb: "", sub: "Watching your flight with the expert's rules." };
+    else if (a?.thinking) status = { label: "Thinking…", orb: "thinking", sub: "Composing a question for this moment." };
+    else if (a?.waiting_answer) status = { label: "Waiting for your answer", orb: "", sub: "Speak or type it below." };
+    else if (a?.follow_up) status = { label: "Follow-up queued", orb: "", sub: "Asked at the next calm moment." };
+    else if (a?.cooldown_s) status = { label: "Observing", orb: "", sub: `Next question in ${a.cooldown_s}s at the earliest.` };
+    else if (a?.ready) status = { label: "Ready to ask", orb: "thinking", sub: "Something worth learning just happened." };
+    else status = { label: "Observing", orb: "", sub: "Watching your flight." };
   }
   const score = attention?.score ?? 0;
+  const detailsAvailable = mode === "expert" && sessionActive;
 
-  const rowClass = (r: TranscriptRow) => `msg ${r.role}${r.high ? " high" : ""}`;
+  // the question being asked is the newest apprentice message: highlighted, typed out, replayable
+  let currentRow = -1;
+  let lastTutorRow = -1;
+  transcript.forEach((r, i) => {
+    if (r.role === "ai" && currentQuestion && r.text === currentQuestion) currentRow = i;
+    if (r.role === "tutor") lastTutorRow = i;
+  });
+
+  const rowClass = (r: TranscriptRow, i: number) => `msg ${r.role}${r.high ? " high" : ""}${i === currentRow ? " current" : ""}`;
 
   return (
     <div className="ai-panel" style={hidden ? { display: "none" } : undefined}>
-      {mode === "expert" ? (
-        <>
-          <div className="panel cortex">
-            <div className="panel-head">
-              <span className="eyebrow">Apprentice cortex</span>
-              <button className="btn btn-sm" onClick={triggerQuestion} disabled={!sessionActive}>
-                Ask now
-              </button>
+      <div className="panel status-line">
+        <div className="status-row">
+          <div className={`brain-orb ${status.orb}`} />
+          <div className="status-text">
+            <strong>{status.label}</strong>
+            <span>{status.sub}</span>
+          </div>
+          {detailsAvailable && (
+            <button className={`btn btn-sm btn-ghost ${showDetails ? "active" : ""}`} onClick={() => setShowDetails((v) => !v)}>
+              Details
+            </button>
+          )}
+          {mode === "expert" && (
+            <button className="btn btn-sm" onClick={triggerQuestion} disabled={!sessionActive}>
+              Ask now
+            </button>
+          )}
+        </div>
+        {detailsAvailable && showDetails && (
+          <div className="details">
+            <div className="attn-meter">
+              <div className={`attn-fill ${attention?.ready ? "ready" : ""}`} style={{ width: `${Math.min(100, (score / 6) * 100)}%` }} />
+              <div className="attn-threshold" style={{ left: "50%" }} />
             </div>
-            <div className="brain">
-              <div className={`brain-orb ${brain.orb}`} />
-              <div className="brain-state">
-                <strong>{brain.label}</strong>
-                <span className="dim" style={{ fontSize: 12 }}>{brain.sub}</span>
-                <div className="attn-meter">
-                  <div className={`attn-fill ${attention?.ready ? "ready" : ""}`} style={{ width: `${Math.min(100, (score / 6) * 100)}%` }} />
-                  <div className="attn-threshold" style={{ left: "50%" }} />
-                </div>
-                <div className="attn-meta">
-                  <span>ATTENTION {score.toFixed(1)}</span>
-                  <span>ASK ≥ 3.0</span>
-                </div>
-              </div>
+            <div className="attn-meta">
+              <span>ATTENTION {score.toFixed(1)}</span>
+              <span>ASK ≥ 3.0</span>
             </div>
-            {sessionActive && attention?.reasons?.length ? (
+            {attention?.reasons?.length ? (
               <ul className="why">
                 {attention.reasons.slice(0, 3).map((r) => (
                   <li key={r}>{r}</li>
                 ))}
               </ul>
             ) : null}
-            {sessionActive && attention?.targets?.length ? (
+            {attention?.targets?.length ? (
               <div className="target-chips">
                 {attention.targets.map((t) => (
                   <span key={t.slot} className={`tchip kind-${t.kind}`}>
@@ -558,160 +568,99 @@ export function VoicePanel(props: {
                 ))}
               </div>
             ) : null}
-            {latestObservation && sessionActive && <div className="observation">👁 {latestObservation.observation}</div>}
-          </div>
-
-          <div className="panel question-card">
-            <div className="q-meta">
-              <span className="eyebrow">Question</span>
-              {currentQuestion && <span className={`q-kind ${currentMeta.kind ?? "rule"}`}>{KIND_LABEL[currentMeta.kind ?? "rule"]}</span>}
-              {currentQuestion && currentMeta.slotName && (
-                <span className="q-slot">
-                  learning <b>{currentMeta.slotName}</b>
-                </span>
-              )}
-            </div>
-            {currentQuestion ? (
-              <p className="q-text">
-                {typed}
-                {typed.length < currentQuestion.length && <span className="caret" />}
-              </p>
-            ) : (
-              <p className="q-text placeholder">
-                The apprentice asks when something worth learning happens: a road crossing, a defect, a near miss, a habit it noticed.
-              </p>
-            )}
-            {currentQuestion && (
-              <div className="q-actions">
-                <button className="btn btn-sm" onClick={() => speakText(currentQuestion)} disabled={listening}>
-                  ▶ Replay
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      ) : (
-        <>
-          <div className={`panel tutor-card urgency-${latestAdvice?.urgency ?? "low"}`}>
-            <div className="panel-head">
-              <span className="eyebrow">AI flight tutor</span>
-              {latestAdvice && <span className={`chip ${latestAdvice.urgency === "high" ? "bad" : latestAdvice.urgency === "medium" ? "warn" : "ok"}`}>{latestAdvice.category.replace("_", " ")}</span>}
-            </div>
-            <p className="advice">{latestAdvice?.speech ?? "The tutor coaches you with the rules the expert taught, and warns you before a danger."}</p>
-            {latestAdvice?.knowledge_reference && <div className="ref">◆ {latestAdvice.knowledge_reference}</div>}
-            {latestAdvice && (
-              <div className="q-actions">
-                <button className="btn btn-sm" onClick={() => speakText(latestAdvice.speech)}>
-                  ▶ Replay
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="panel guardian-card">
-            <div className={`shield ${guardian?.engaged ? "engaged" : guardian?.enabled ? "" : "off"}`}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a780ff" strokeWidth="2">
-                <path d="M12 2 4 5v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V5z" />
-                <path d="m8.5 12 2.5 2.5 4.5-5" />
-              </svg>
-            </div>
-            <div className="g-text">
-              <strong>Guardian {guardian?.enabled ? (guardian.engaged ? "engaged" : "armed") : "off"}</strong>
-              Model-predictive collision avoidance: it takes the sticks for a moment when a crash is predicted.
-              {" "}
-              <span className="mono">{guardian?.interventions ?? 0} interventions</span>
-            </div>
-          </div>
-        </>
-      )}
-
-      <div className="panel voice-line">
-        <span className={`voice-label ${vizMode}`}>{voiceLabel}</span>
-        <VoiceViz mode={vizMode} getLevel={voiceLevel} />
-      </div>
-
-      <div className="panel">
-        <div className="mic-controls">
-          {listening ? (
-            <>
-              <span className="rec-indicator">
-                ● {recording === "note" ? "Recording your note" : recording === "question" ? "Listening to your question" : "Recording your answer"}
-              </span>
-              <button className="btn btn-primary btn-sm" onClick={() => recordingRef.current?.finish()}>
-                ⏹ {recording === "question" ? "Ask" : "Save"}
-              </button>
-              <button className="btn btn-sm" onClick={() => recordingRef.current?.cancel()}>
-                Discard
-              </button>
-            </>
-          ) : mode === "expert" ? (
-            <button className="btn btn-record" onClick={recordNote} disabled={!sessionActive || isSubmitting}>
-              🎙 Record a note <kbd>R</kbd>
-            </button>
-          ) : (
-            <button className="btn btn-record" onClick={askTutorByVoice} disabled={!sessionActive || isSubmitting}>
-              {isSubmitting ? "⏳ Tutor is thinking…" : "🎙 Ask the tutor"} <kbd>R</kbd>
-            </button>
-          )}
-        </div>
-        {mode === "expert" ? (
-          <div className="composer">
-            <input
-              className="field"
-              type="text"
-              placeholder={currentQuestion ? "Speak after the beep, or type your answer…" : "Type a note for the apprentice…"}
-              value={answerInput}
-              onChange={(e) => setAnswerInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
-            />
-            <button className="btn btn-primary" onClick={() => submitAnswer()} disabled={isSubmitting || !answerInput.trim()}>
-              {isSubmitting ? "…" : "Teach"}
-            </button>
-          </div>
-        ) : (
-          <div className="composer">
-            <input
-              className="field"
-              type="text"
-              placeholder="Ask the tutor (e.g. how high should I cross the road?)"
-              value={noviceQueryInput}
-              onChange={(e) => setNoviceQueryInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && askTutor()}
-            />
-            <button className="btn btn-primary" onClick={() => askTutor()} disabled={!noviceQueryInput.trim()}>
-              Ask
-            </button>
+            {latestObservation && <div className="observation">👁 {latestObservation.observation}</div>}
           </div>
         )}
       </div>
 
-      {mode === "expert" && lastSavedInsight && (
-        <div className="panel insight-card" key={lastSavedInsight.text}>
-          <span className="eyebrow">Rule acquired{lastSavedInsight.slot ? ` · ${lastSavedInsight.slot}` : ""}</span>
-          <p>{lastSavedInsight.text}</p>
-        </div>
-      )}
-
-      <div className="panel">
+      <div className="panel feed">
         <div className="panel-head">
-          <span className="eyebrow">Comms log</span>
-          <span className="dim mono" style={{ fontSize: 11 }}>{transcript.length} msgs</span>
+          <span className="eyebrow">Conversation</span>
         </div>
         <div className="transcript" ref={logRef}>
           {transcript.length === 0 ? (
-            <div className="empty-note">No conversation yet.</div>
+            <div className="empty-note">
+              {mode === "expert"
+                ? "The apprentice asks when something worth learning happens: a road crossing, a defect, a near miss, a habit it noticed."
+                : "The tutor coaches you with the rules the expert taught, and warns you before a danger. Ask it anything below."}
+            </div>
           ) : (
             transcript.map((row, i) => (
-              <div key={i} className={rowClass(row)}>
+              <div key={i} className={rowClass(row, i)}>
                 <div className="msg-meta">
                   <span>{ROLE_LABEL[row.role]}</span>
                   {row.tag && <span>· {row.tag}</span>}
                   {row.t !== undefined && <span className="t">{row.t.toFixed(1)}s</span>}
                 </div>
-                <div>{row.text}</div>
+                <div>
+                  {i === currentRow ? typed : row.text}
+                  {i === currentRow && typed.length < row.text.length && <span className="caret" />}
+                </div>
+                {row.ref && <div className="msg-ref">◆ {row.ref}</div>}
+                {(i === currentRow || i === lastTutorRow) && (
+                  <button className="msg-replay" onClick={() => speakText(row.text)} disabled={listening}>
+                    ▶ Replay
+                  </button>
+                )}
               </div>
             ))
           )}
         </div>
+      </div>
+
+      <div className={`panel input-bar ${listening ? "recording" : ""}`}>
+        {listening ? (
+          <>
+            <span className="rec-dot" />
+            <VoiceViz mode="listening" getLevel={voiceLevel} />
+            <button className="btn btn-primary btn-sm" onClick={() => recordingRef.current?.finish()}>
+              ⏹ {recording === "question" ? "Ask" : "Save"}
+            </button>
+            <button className="btn btn-sm" onClick={() => recordingRef.current?.cancel()} title="Discard">
+              ✕
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              className="btn btn-mic"
+              onClick={mode === "expert" ? recordNote : askTutorByVoice}
+              disabled={!sessionActive || isSubmitting}
+              title={mode === "expert" ? "Record a note (R)" : "Ask the tutor by voice (R)"}
+            >
+              🎙
+            </button>
+            {mode === "expert" ? (
+              <>
+                <input
+                  className="field"
+                  type="text"
+                  placeholder={currentQuestion ? "Answer by voice, or type it here…" : "Type a note for the apprentice…"}
+                  value={answerInput}
+                  onChange={(e) => setAnswerInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitAnswer()}
+                />
+                <button className="btn btn-primary" onClick={() => submitAnswer()} disabled={isSubmitting || !answerInput.trim()}>
+                  {isSubmitting ? "…" : "Send"}
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  className="field"
+                  type="text"
+                  placeholder="Ask the tutor (e.g. how high to cross the road?)"
+                  value={noviceQueryInput}
+                  onChange={(e) => setNoviceQueryInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && askTutor()}
+                />
+                <button className="btn btn-primary" onClick={() => askTutor()} disabled={!noviceQueryInput.trim()}>
+                  Send
+                </button>
+              </>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

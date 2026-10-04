@@ -307,7 +307,6 @@ export function App() {
               latestAdvice={latestAdvice}
               latestObservation={latestObservation}
               attention={attention}
-              guardian={state?.guardian}
               prediction={state?.prediction}
               sessionActive={sessionActive}
               hidden={tab !== "ai"}
