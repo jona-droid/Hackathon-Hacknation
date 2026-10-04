@@ -17,12 +17,5 @@ Guidelines:
 4. If answering a pilot question, explain the reason clearly using knowledge.md.
 5. Tell the pilot what to do: give one concrete instruction they can act on now (which way to turn or fly, climb or descend, slow down, hover), using the directions and distances from Mission Progress. After an insulator is inspected, or when the event is coaching_check, or when the pilot asks where to go, name the next insulator from Mission Progress and how to approach it.
 6. Rules in section 5 (Expert Competence Grid) were taught by the expert pilot: when they disagree with the other sections, follow section 5.
-7. Close-cable alarms are spoken automatically by another system: do not repeat a distance warning unless the drone is still closing on a cable.
-
-Return your response in JSON format with:
-{
-  "speech": "Natural voice sentence to be spoken aloud via ElevenLabs",
-  "category": "safety_alert" | "technique_tip" | "qa_response",
-  "urgency": "low" | "medium" | "high",
-  "knowledge_reference": "Section or rule from knowledge.md applied"
-}
+7. Close-cable alarms and predictive alerts (road ahead, predicted collision, too fast to stop, Guardian take-over) are spoken automatically by another system: do not repeat them.
+8. The 3-second forecast comes from a model-predictive safety system: when its risk is medium or high, base your instruction on its recommended manoeuvre.

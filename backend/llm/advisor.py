@@ -4,17 +4,21 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from backend.core.config import TUTOR_MODEL
+from pydantic import BaseModel, Field
+
+from backend.core.config import CABLE_DANGER_M, ROAD_MIN_CROSSING_ALT_M, TUTOR_MODEL
 from backend.llm.client import LLMClient
+from backend.sim.predictor import ACTIONS
+from backend.storage import competence_store
 from backend.storage.knowledge_store import get_knowledge
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "advisor.txt"
 logger = logging.getLogger("robot-apprentice.advisor")
 
 # Cable proximity alerts are spoken without the LLM: they must be instant and never skipped
-DANGER_CABLE_DIST_M = 2.0  # the HUD turns red at the same distance
+DANGER_CABLE_DIST_M = CABLE_DANGER_M  # the HUD turns red at the same distance
 CLOSING_CABLE_DIST_M = 4.0
 CLOSING_SPEED_MS = 1.5  # approaching a cable faster than this, inside CLOSING_CABLE_DIST_M, is a warning
 
@@ -59,12 +63,72 @@ def safety_alert(telemetry: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+class Advice(BaseModel):
+    speech: str = Field(description="At most 2 short sentences, 30 words, the instruction first. Spoken aloud.")
+    category: Literal["safety_alert", "technique_tip", "qa_response"]
+    urgency: Literal["low", "medium", "high"]
+    knowledge_reference: str = Field(description="The expert rule or knowledge.md section applied.")
+
+
+def expert_rule(slot: str) -> str | None:
+    """The short form of a rule the expert taught, for a spoken sentence (None if not learned yet)."""
+    entry = competence_store.load().get(slot)
+    if not entry:
+        return None
+    rule = entry["rule"].split(";")[0].split(" because ")[0].strip().rstrip(".,")
+    words = rule.split()
+    return " ".join(words[:22]) + ("" if len(words) <= 22 else "...")
+
+
+_HAZARD = {"cable": "a cable", "tower": "the tower", "tree": "a tree", "ground": "the ground"}
+
+
+def predictive_alert(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Instant spoken alert for a predicted danger (no LLM): road ahead, conflict, overspeed, Guardian."""
+    kind = event.get("type")
+    if kind == "road_ahead":
+        rule = expert_rule("road_crossing.crossing_rule")
+        if event.get("low"):
+            act = ACTIONS.get(event.get("action") or "brake_climb", ACTIONS["brake_climb"])["say"]
+            speech = f"Road ahead in {event['in_s']:.0f} seconds and you are only {event['alt']:.0f} metres up: {act}."
+        else:
+            speech = f"Road ahead in {event['in_s']:.0f} seconds: cross straight and quickly, never hover over traffic."
+        return {"speech": speech, "category": "safety_alert", "urgency": "medium" if event.get("low") else "low",
+                "knowledge_reference": f"Expert rule: {rule}" if rule else f"Road crossing: at least {ROAD_MIN_CROSSING_ALT_M:.0f} m, straight, no hovering"}
+    if kind == "conflict_predicted":
+        what = _HAZARD.get(event.get("hazard") or "", "an obstacle")
+        act = ACTIONS.get(event.get("action") or "brake", ACTIONS["brake"])["say"]
+        return {"speech": f"You will hit {what} in {event.get('in_s') or 1:.0f} seconds: {act}!",
+                "category": "safety_alert", "urgency": "high",
+                "knowledge_reference": "Predictive safety: 3-second trajectory forecast"}
+    if kind == "cannot_stop":
+        what = _HAZARD.get(event.get("hazard") or "", "the obstacle")
+        return {"speech": f"Too fast: at {event['speed']:.0f} metres per second you cannot stop before {what}. Release the sticks now.",
+                "category": "safety_alert", "urgency": "high",
+                "knowledge_reference": f"Stopping distance {event['stop_dist']:.0f} m at this speed"}
+    if kind == "guardian_engaged":
+        act = ACTIONS.get(event.get("action") or "brake", ACTIONS["brake"])["label"].lower()
+        return {"speech": f"Guardian: I am taking over to {act}.", "category": "safety_alert", "urgency": "high",
+                "knowledge_reference": "AI Guardian: collision avoidance"}
+    return None
+
+
+def coaching_hint(mission: dict[str, Any] | None) -> dict[str, Any]:
+    """What to do next, with the expert's rule for it when one was learned (no LLM)."""
+    learned = expert_rule("insulator_inspection.inspection_standoff")
+    return {"speech": _next_step(mission), "category": "technique_tip", "urgency": "low",
+            "knowledge_reference": "Expert rule: inspection distance" if learned else "Mission plan"}
+
+
 def _next_step(mission: dict[str, Any] | None) -> str:
     todo = (mission or {}).get("remaining_insulators") or []
     if not todo:
         return "All insulators are inspected. Fly back to the take-off point and land."
     n = todo[0]
-    return f"Next, inspect insulator {n['id']}, about {n['distance_m']:.0f} metres {n['direction']}. Approach slowly and hover about 3 metres from it."
+    above = float(n.get("height_above_drone_m", 0.0))
+    level = f", {above:.0f} metres above you" if above > 3 else (f", {-above:.0f} metres below you" if above < -3 else "")
+    how = expert_rule("insulator_inspection.inspection_standoff") or "Approach slowly and hover about 3 metres from it"
+    return f"Next, insulator {n['id']}, about {n['distance_m']:.0f} metres {n['direction']}{level}. {how}."
 
 
 def _fallback_advice(
@@ -150,7 +214,7 @@ def _fallback_advice(
 
 class Advisor:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self.client = client or LLMClient(model=TUTOR_MODEL, timeout=15.0)
+        self.client = client or LLMClient(model=TUTOR_MODEL, timeout=15.0, purpose="tutor")
         self.system_prompt = (
             PROMPT_PATH.read_text(encoding="utf-8")
             if PROMPT_PATH.exists()
@@ -164,29 +228,29 @@ class Advisor:
         event: dict[str, Any] | None = None,
         novice_query: str | None = None,
         mission: dict[str, Any] | None = None,
+        prediction: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         knowledge = get_knowledge()
-        tel = {k: v for k, v in telemetry.items() if k not in ("quat", "rpy", "acc", "wind")}
+        tel = {k: v for k, v in telemetry.items() if k not in ("quat", "rpy", "acc", "wind", "nearest_cable_point")}
+        forecast = {k: v for k, v in (prediction or {}).items() if k not in ("path", "stop_point")}
 
         prompt = (
             f"Knowledge Base (knowledge.md):\n{knowledge}\n\n"
             f"Current Telemetry:\n{json.dumps(tel, separators=(',', ':'))}\n\n"
+            f"3-second forecast (risk, predicted conflict, recommended manoeuvre, road ahead, stopping distance):\n"
+            f"{json.dumps(forecast or None, separators=(',', ':'))}\n\n"
             f"Mission Progress:\n{json.dumps(mission or {}, separators=(',', ':'))}\n\n"
             f"Event Context:\n{json.dumps(event or {}, separators=(',', ':'))}\n\n"
-            f"Novice Pilot Query (if any):\n{novice_query or 'None (provide proactive coaching)'}\n\n"
-            "Return JSON advice with keys: speech, category, urgency, knowledge_reference."
+            f"Novice Pilot Query (if any):\n{novice_query or 'None (provide proactive coaching)'}"
         )
 
         try:
             if self.client.is_available:
-                result = self.client.call_json(
-                    prompt=prompt,
-                    system=self.system_prompt,
-                    image_b64=image_b64,
-                )
-                if "speech" in result:
-                    return result
-                logger.warning("Tutor reply has no speech, using the fallback: %s", result)
+                advice = self.client.parse(prompt=prompt, system=self.system_prompt, output_format=Advice,
+                                           max_tokens=300, image_b64=image_b64)
+                if advice.speech.strip():
+                    return advice.model_dump()
+                logger.warning("Tutor reply has no speech, using the fallback")
         except Exception:
             logger.exception("Tutor call failed, using the fallback advice")
 

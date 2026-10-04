@@ -24,12 +24,13 @@ class SlotUpdate(BaseModel):
     conditions: list[str] = Field(description="Situations that change the technique, merged with the stored ones.")
     reason: str = Field(description='Why the pilot does it, or "".')
     vague: bool = Field(description="True if the answer lacks what the slot needs.")
+    confirms_hypothesis: bool = Field(description="True if the pilot confirmed the proposed habit as their rule.")
     follow_up: str = Field(description='One short spoken follow-up question if vague, else "".')
 
 
 class KnowledgeManager:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self.client = client or LLMClient()
+        self.client = client or LLMClient(purpose="knowledge")
         self.system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
         self._all_slots = [
             {"slot": s["key"], "learn": s["learn"]} for s in competence_store.SLOTS.values()
@@ -41,6 +42,7 @@ class KnowledgeManager:
         answer: str,
         target_slot: str | None = None,
         deviation: dict[str, Any] | None = None,
+        hypothesis: dict[str, Any] | None = None,
         measured: dict[str, float] | None = None,
         measured_task: str | None = None,
         session: str | None = None,
@@ -63,6 +65,7 @@ class KnowledgeManager:
             "answer": answer,
             "target_slot": target,
             "about_deviation": deviation and {k: deviation[k] for k in ("expected", "now") if k in deviation},
+            "about_hypothesis": hypothesis and hypothesis.get("text"),
             "measured": {"task": measured_task, **(measured or {})},
             "all_slots": self._all_slots,
         }, ensure_ascii=False)
@@ -84,9 +87,13 @@ class KnowledgeManager:
             return {**result, "insight": update.rule.strip(), "slot": None, "follow_up": follow_up}
 
         spec = competence_store.SLOTS[update.slot]
-        # evidence only from an episode of the slot's own task
-        evidence = {m: measured[m] for m in spec.get("evidence", []) if measured and m in measured} \
-            if spec["task"] == measured_task else {}
+        # evidence: the habit the pilot confirmed, else the episode the question was about
+        confirmed_habit = bool(hypothesis and update.slot == hypothesis.get("slot") and update.confirms_hypothesis)
+        if confirmed_habit:
+            evidence = dict(hypothesis["evidence"])
+        else:
+            evidence = {m: measured[m] for m in spec.get("evidence", []) if measured and m in measured} \
+                if spec["task"] == measured_task else {}
         entry = competence_store.fill(
             update.slot,
             rule=update.rule.strip(),
@@ -98,6 +105,7 @@ class KnowledgeManager:
             session=session,
             t=t,
             about_deviation=bool(deviation),
+            observed_times=int(hypothesis["n"]) if confirmed_habit else 0,
         )
         return {
             **result,

@@ -1,7 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { WS_URL } from "./config";
 
-export type SimEvent = { type: string; [k: string]: unknown };
+export type SimEvent = { type: string; t?: number; [k: string]: unknown };
+
+export type KnowledgeCoverage = { filled: number; confirmed: number; total: number };
+
+/** 3-second forecast from the model-predictive safety system (backend/sim/predictor.py). */
+export type Prediction = {
+  risk: "none" | "low" | "medium" | "high";
+  conflict?: { hazard: string; in_s: number; dist: number; crash?: boolean };
+  action?: string;
+  action_label?: string;
+  road_in_s?: number;
+  road_alt?: number;
+  stop_dist: number;
+  cannot_stop: boolean;
+  path: number[][];
+  stop_point: number[] | null;
+};
+
+export type Guardian = { enabled: boolean; armed: boolean; engaged: boolean; action: string | null; interventions: number };
+
+export type AIUsage = { calls: number; tokens: number; cached_tokens: number; cost_usd: number; by_purpose: Record<string, number> };
 
 export type SimState = {
   t: number;
@@ -9,11 +29,20 @@ export type SimState = {
   vel: number[];
   acc: number[];
   speed: number;
+  horizontal_speed?: number;
+  vertical_speed?: number;
   altitude: number;
   yaw: number;
+  heading_deg?: number;
   rpy: number[];
   quat: number[];
   cable_dist: number;
+  cable_dz?: number;
+  pylon_dist?: number;
+  tree_dist?: number;
+  road_dist?: number;
+  insulator_dist?: number;
+  nearest_insulator?: string;
   nearest_cable_point: number[];
   collided: boolean;
   collision_with?: string | null;
@@ -24,26 +53,39 @@ export type SimState = {
   defects_spotted?: string[];
   mode: string;
   inspected_count: number;
-  violations?: Array<{ text: string }>;
   session_active?: boolean;
   task?: string | null; // competence-grid task the pilot is doing
   task_name?: string | null;
   knowledge?: KnowledgeCoverage;
+  prediction?: Prediction | null;
+  guardian?: Guardian;
+  ai_usage?: AIUsage;
 };
-
-export type KnowledgeCoverage = { filled: number; confirmed: number; total: number };
 
 export type AIQuestion = {
   question: string;
   slot?: string | null; // competence-grid slot the question tries to fill
   slot_name?: string | null;
-  kind?: "observer" | "deviation" | "follow_up";
+  kind?: "rule" | "hypothesis" | "deviation" | "follow_up";
+  observation?: string;
   event: SimEvent;
   telemetry: Partial<SimState>;
   t: number;
 };
 
 export type AIObservation = { t: number; observation: string; asked: boolean };
+
+/** What the apprentice's attention model is thinking (backend/llm/attention.py). */
+export type Attention = {
+  score: number;
+  ready: boolean;
+  reasons: string[];
+  targets: Array<{ slot: string; name: string; kind: string }>;
+  cooldown_s: number;
+  thinking: boolean;
+  waiting_answer: boolean;
+  follow_up: boolean;
+};
 
 export type AIAdvice = {
   speech: string;
@@ -58,38 +100,44 @@ export function useSimSocket() {
   const [latestQuestion, setLatestQuestion] = useState<AIQuestion | null>(null);
   const [latestAdvice, setLatestAdvice] = useState<AIAdvice | null>(null);
   const [latestObservation, setLatestObservation] = useState<AIObservation | null>(null);
+  const [attention, setAttention] = useState<Attention | null>(null);
+  const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: ReturnType<typeof setTimeout>;
+    let closed = false;
 
     function connect() {
       ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+      ws.onopen = () => setConnected(true);
 
       ws.onmessage = (msg) => {
         try {
           const data = JSON.parse(msg.data);
           if (data.type === "state") setState(data);
-          if (data.type === "event") setEvents((prev) => [...prev.slice(-99), data]);
-          if (data.type === "warning") setEvents((prev) => [...prev.slice(-99), data]);
-          if (data.type === "question") setLatestQuestion(data);
-          if (data.type === "advice") setLatestAdvice(data);
-          if (data.type === "observation") setLatestObservation(data);
+          else if (data.type === "event") setEvents((prev) => [...prev.slice(-99), data.event]);
+          else if (data.type === "question") setLatestQuestion(data);
+          else if (data.type === "advice") setLatestAdvice(data);
+          else if (data.type === "observation") setLatestObservation(data);
+          else if (data.type === "attention") setAttention(data);
         } catch (e) {
           console.error("WS parse error:", e);
         }
       };
 
       ws.onclose = () => {
-        reconnectTimeout = setTimeout(connect, 2000);
+        setConnected(false);
+        if (!closed) reconnectTimeout = setTimeout(connect, 2000);
       };
     }
 
     connect();
 
     return () => {
+      closed = true;
       clearTimeout(reconnectTimeout);
       ws?.close();
     };
@@ -102,6 +150,8 @@ export function useSimSocket() {
       latestQuestion,
       latestAdvice,
       latestObservation,
+      attention,
+      connected,
       sendKeys: (down: string[]) => {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
@@ -115,9 +165,8 @@ export function useSimSocket() {
         }
       },
     }),
-    [events, state, latestQuestion, latestAdvice, latestObservation]
+    [events, state, latestQuestion, latestAdvice, latestObservation, attention, connected]
   );
 
   return api;
 }
-

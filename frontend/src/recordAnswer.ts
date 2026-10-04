@@ -16,16 +16,31 @@ export type AnswerRecording = {
   done: Promise<Blob | null>; // null = nothing said, skipped or cancelled
   finish: () => void; // Enter / Stop: stop now and keep the recording
   cancel: () => void; // Esc / Discard / end of flight: stop now and throw it away
+  level: () => number; // current microphone loudness, 0..1, for the voice visualiser
 };
 
 /** Ask for microphone permission once (on Start Flight), then release the mic straight away. */
 export async function primeMicrophone(): Promise<boolean> {
+  audioContext(); // unlock audio while we have a user gesture
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((t) => t.stop());
     return true;
   } catch {
     return false;
+  }
+}
+
+let sharedCtx: AudioContext | null = null;
+
+/** One audio context for the voice visualiser, created during a click (Start Flight) so it can run. */
+export function audioContext(): AudioContext | null {
+  try {
+    sharedCtx = sharedCtx ?? new AudioContext();
+    if (sharedCtx.state === "suspended") void sharedCtx.resume();
+    return sharedCtx;
+  } catch {
+    return null;
   }
 }
 
@@ -60,6 +75,7 @@ export async function recordAnswer(limits: RecordingLimits = ANSWER_LIMITS): Pro
   let lastSpeech = started;
   let heardSpeech = false;
   let cancelled = false;
+  let lastLevel = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
 
   const done = new Promise<Blob | null>((resolve) => {
@@ -77,6 +93,7 @@ export async function recordAnswer(limits: RecordingLimits = ANSWER_LIMITS): Pro
   timer = setInterval(() => {
     analyser.getFloatTimeDomainData(samples);
     const rms = Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
+    lastLevel = Math.min(1, rms * 8);
     const now = Date.now();
     if (rms > SPEECH_LEVEL) {
       heardSpeech = true;
@@ -94,5 +111,6 @@ export async function recordAnswer(limits: RecordingLimits = ANSWER_LIMITS): Pro
       cancelled = true;
       stop();
     },
+    level: () => lastLevel,
   };
 }

@@ -11,7 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import math
+
 import numpy as np
+
+from backend.sim.scene import Scene
+
+PYLON_X = Scene().pylon_x  # the scene is fixed: towers on the line y = 0
 
 TASK_SWITCH_S = 1.0
 MIN_EPISODE_S = 2.0  # shorter episodes are not compared with learned rules
@@ -72,7 +78,7 @@ def classify(s: dict[str, Any], t: float, last_alarm_t: float, approached: bool)
         return None
     if t - last_alarm_t < EMERGENCY_HOLD_S:
         return "emergency"
-    if s["road_dist"] < 4.0:
+    if s["road_dist"] < 8.0:  # includes the pause to check the traffic before crossing
         return "road_crossing"
     if not approached:
         return "preflight_takeoff"
@@ -80,13 +86,25 @@ def classify(s: dict[str, Any], t: float, last_alarm_t: float, approached: bool)
         return "insulator_inspection"
     if s["tree_dist"] < 6.0:
         return "vegetation"
-    if s["pylon_dist"] < 10.0:
+    if s["pylon_dist"] < 10.0 and not _leaving_tower(s):
         return "structure_approach"
     if s["cable_dist"] < 6.0:
         return "conductor_inspection"
     if s["speed"] > 1.5 and s["cable_dist"] < 20.0:
         return "corridor_transit"
     return None
+
+
+def _leaving_tower(s: dict[str, Any]) -> bool:
+    """Moving away from the nearest tower (a departure, not an approach)."""
+    vel = s.get("vel")
+    if not vel:
+        return False
+    x, y = s["pos"][0], s["pos"][1]
+    px = min(PYLON_X, key=lambda p: abs(p - x))
+    dx, dy = x - px, y
+    d = math.hypot(dx, dy)
+    return d > 0.5 and (dx * vel[0] + dy * vel[1]) / d > 0.5
 
 
 def side_tasks(s: dict[str, Any], t: float, last_defect_t: float) -> list[str]:

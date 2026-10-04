@@ -1,10 +1,11 @@
-"""Periodic observation of the expert's flight; pushes questions to the frontend for TTS.
+"""Expert mode: the apprentice's question loop.
 
-Every OBSERVER_INTERVAL_S:
-1. finished task episodes are compared with the learned rules: the same behaviour confirms a
-   rule, a different one becomes a deviation to ask about;
-2. if the pilot can be asked now, a pending follow-up is asked as is (no LLM call); otherwise
-   Claude is called only when there is something to learn (an open slot or a deviation).
+Every OBSERVER_TICK_S, locally and for free:
+1. finished task episodes are stored (episode_store) and compared with the learned rules: the same
+   behaviour confirms a rule, a different one becomes a deviation to ask about;
+2. the attention model (llm/attention.py) scores the moment and picks the slots it could teach.
+Then, if the pilot can be asked, a pending follow-up is asked as is (no LLM call); otherwise Claude
+is called only when the moment is salient, with the reasons ("why now") and the candidate slots.
 """
 
 from __future__ import annotations
@@ -17,24 +18,26 @@ from backend.api.ws import broadcast
 from backend.core.config import (
     OBSERVER_FRAME_MAX_AGE_S,
     OBSERVER_INTERVAL_S,
+    OBSERVER_TICK_S,
     OBSERVER_WINDOW_S,
     QUESTION_COOLDOWN_S,
     UNANSWERED_QUESTION_TIMEOUT_S,
 )
 from backend.core.state import runtime
-from backend.sim.tasks import TASK_METRICS, Episode
-from backend.storage import competence_store
+from backend.llm import attention
+from backend.storage import competence_store, episode_store
 
 logger = logging.getLogger("robot-apprentice.observer")
 
 FOLLOW_UP_MAX_AGE_S = 60.0
-PILOT_NOTE_MAX_S = 90.0  # a note recording the browser never closed stops blocking questions after this
 DEVIATION_MAX_AGE_S = 40.0
-MAX_OPEN_SLOTS = 8
+PILOT_NOTE_MAX_S = 90.0  # a note recording the browser never closed stops blocking questions after this
+RETRY_DECLINED_S = 8.0  # the LLM said "not now": the same moment may be offered once more after this
+MAX_ATTEMPTS_PER_MOMENT = 2
 
 
 def _awaiting_answer(t: float) -> bool:
-    last = runtime.qa_history[-1] if runtime.qa_history else None
+    last = next((qa for qa in reversed(runtime.qa_history) if qa.get("question")), None)
     return bool(last and last["answer"] is None and t - last["t"] < UNANSWERED_QUESTION_TIMEOUT_S)
 
 
@@ -59,7 +62,8 @@ def _can_ask(t: float) -> bool:
 def _calm() -> bool:
     """A safe moment for a question asked without the observer: slow and clear of every obstacle."""
     s = runtime.drone.snapshot()
-    return s["speed"] < 1.5 and min(s["cable_dist"], s["tree_dist"], s["pylon_dist"]) > 2.0
+    risky = (runtime.flight_log.prediction or {}).get("risk") in ("medium", "high")
+    return s["speed"] < 1.5 and min(s["cable_dist"], s["tree_dist"], s["pylon_dist"]) > 2.0 and not risky
 
 
 def _session_id() -> str | None:
@@ -69,12 +73,13 @@ def _session_id() -> str | None:
 # ---- closing the loop -------------------------------------------------------------
 
 def review_episodes() -> None:
-    """Compare every finished episode with the rules learned for its task."""
+    """Store every finished episode and compare it with the rules learned for its task."""
     episodes = runtime.flight_log.tasks.pop_unreviewed()
     if runtime.mode != "expert" or not runtime.session_active:
         return
     asked = {qa.get("slot") for qa in runtime.qa_history if qa.get("kind") == "deviation"}
     for ep in episodes:
+        episode_store.append(_session_id(), ep.task, ep.start, ep.duration, ep.signature, ep.target)
         for r in competence_store.review_episode(ep.task, ep.signature, ep.start, _session_id()):
             logger.info("rule check %s: %s (expected %s, now %s)", r["slot"], r["status"], r["expected"], r["now"])
             if runtime.recorder:
@@ -83,62 +88,55 @@ def review_episodes() -> None:
                 runtime.pending_deviation = {**r, "t": ep.end}
 
 
-# ---- what there is to learn right now ------------------------------------------------
+# ---- attention ----------------------------------------------------------------------
 
-def _episode_view(ep: Episode, t: float, finished: bool) -> dict[str, Any]:
-    view: dict[str, Any] = {
-        "task": ep.task,
-        "duration_s": round(ep.duration, 1),
-        "measured": {m: ep.signature[m] for m in TASK_METRICS.get(ep.task, [])},
-    }
-    if ep.target:
-        view["target"] = ep.target
-    if finished:
-        view["ended_s_ago"] = round(t - ep.end, 1)
-    return view
-
-
-def learning_context(t: float) -> dict[str, Any]:
-    log = runtime.flight_log
-    entries = competence_store.load()
-    cur = log.current_episode()
-    recent = list(reversed(log.tasks.recent(t)))
-    tasks = list(dict.fromkeys(([cur.task] if cur else []) + [ep.task for ep in recent] + log.tasks.side))
-
+def assess(t: float, force: bool = False) -> attention.Moment | None:
     dev = runtime.pending_deviation
     if dev and t - dev["t"] > DEVIATION_MAX_AGE_S:
         runtime.pending_deviation = dev = None
+    return attention.assess(
+        t,
+        runtime.flight_log,
+        competence_store.load(),
+        runtime.qa_history,
+        runtime.attention_consumed,
+        deviation=dev,
+        episodes_for=episode_store.by_task,
+        force=force,
+    )
 
+
+def _learning(moment: attention.Moment) -> dict[str, Any]:
+    """The moment as the LLM sees it: why now, the slots to choose from, what is already known."""
+    entries = competence_store.load()
+    tasks = {competence_store.SLOTS[tg.slot]["task"] for tg in moment.targets}
+    cur = runtime.flight_log.tasks.current
+    if cur:
+        tasks.add(cur)
     cov = competence_store.coverage()
-    ctx: dict[str, Any] = {
+    out: dict[str, Any] = {
+        "why_now": moment.reasons[:4],
+        "targets": [tg.to_prompt() for tg in moment.targets],
+        "known_rules": {k: competence_store.describe(k, e) for k, e in entries.items()
+                        if competence_store.SLOTS[k]["task"] in tasks},
         "knowledge": f"{cov['filled']}/{cov['total']} slots filled",
-        "current_task": (
-            {**_episode_view(cur, t, False), "name": competence_store.TASKS[cur.task]["name"]}
-            if cur else "none: pausing away from the line"
-        ),
-        "just_finished": [_episode_view(ep, t, True) for ep in recent],
-        "open_slots": [s for task in tasks for s in competence_store.open_slots(task, entries)][:MAX_OPEN_SLOTS],
-        "known_rules": {
-            key: competence_store.describe(key, e)
-            for key, e in entries.items()
-            if competence_store.SLOTS[key]["task"] in tasks
-        },
     }
-    if log.tasks.side:
-        ctx["side_tasks"] = log.tasks.side
-    if dev:
-        ctx["deviation"] = {k: dev[k] for k in ("slot", "rule", "expected", "now")}
-    return ctx
+    if any(tg.kind == "deviation" for tg in moment.targets) and runtime.pending_deviation:
+        out["deviation"] = {k: runtime.pending_deviation[k] for k in ("slot", "rule", "expected", "now")}
+    return out
 
 
-def _has_learning_target(learning: dict[str, Any]) -> bool:
-    return bool(learning["open_slots"] or learning.get("deviation"))
+def _qa_for_prompt() -> list[dict[str, Any]]:
+    return [
+        {"t": round(qa["t"], 1), "question": qa["question"], "answer": qa["answer"], "slot": qa.get("slot")}
+        for qa in runtime.qa_history[-5:]
+    ]
 
 
 # ---- asking ---------------------------------------------------------------------------
 
 def _push_question(t: float, question: str, slot: str | None, kind: str, observation: str,
-                   deviation: dict[str, Any] | None = None) -> dict[str, Any]:
+                   deviation: dict[str, Any] | None = None, hypothesis: dict[str, Any] | None = None) -> dict[str, Any]:
     """Register a question (for the answer to know its slot and episode) and build its payload."""
     task = competence_store.SLOTS[slot]["task"] if slot else None
     ep = runtime.flight_log.latest_episode(task) if task else runtime.flight_log.current_episode()
@@ -148,8 +146,9 @@ def _push_question(t: float, question: str, slot: str | None, kind: str, observa
         "question": question,
         "answer": None,
         "slot": slot,
-        "kind": kind,  # "observer" | "deviation" | "follow_up"
+        "kind": kind,  # "rule" | "hypothesis" | "deviation" | "follow_up"
         "deviation": deviation,
+        "hypothesis": hypothesis,
         "episode": {"task": ep.task, "start": ep.start} if ep else None,
     })
     payload = {
@@ -182,18 +181,15 @@ def _ask_follow_up(t: float) -> dict[str, Any] | None:
     return _push_question(t, fu["question"], fu["slot"], "follow_up", "Follow-up on a vague answer.")
 
 
-def _qa_for_prompt() -> list[dict[str, Any]]:
-    return [
-        {"t": round(qa["t"], 1), "question": qa["question"], "answer": qa["answer"], "slot": qa.get("slot")}
-        for qa in runtime.qa_history[-6:]
-    ]
-
-
-async def observe_once(force: bool = False, learning: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Ask the observer about the recent flight; returns the question payload if one was asked."""
+async def observe_once(force: bool = False, moment: attention.Moment | None = None) -> dict[str, Any] | None:
+    """Ask Claude about a moment; returns the question payload if one was asked."""
     epoch = runtime.session_epoch
-    learning = learning or learning_context(runtime.drone.elapsed_time)
+    t0 = runtime.drone.elapsed_time
+    moment = moment or assess(t0, force=force)
+    if moment is None:
+        return None
     runtime.observer_busy = True
+    runtime.last_observer_call = t0
     try:
         flight = runtime.flight_log.observer_context(OBSERVER_WINDOW_S)
         frame = runtime.camera.get_latest_frame()
@@ -201,7 +197,7 @@ async def observe_once(force: bool = False, learning: dict[str, Any] | None = No
         if frame and not 0 <= frame_age <= OBSERVER_FRAME_MAX_AGE_S:
             frame = None  # stale (or from a previous flight): it would contradict the telemetry
         decision = await runtime.observer.decide(
-            flight, learning, _qa_for_prompt(), force=force, frame_b64=frame, frame_age_s=frame_age
+            flight, _learning(moment), _qa_for_prompt(), force=force, frame_b64=frame, frame_age_s=frame_age
         )
     finally:
         runtime.observer_busy = False
@@ -209,40 +205,75 @@ async def observe_once(force: bool = False, learning: dict[str, Any] | None = No
     if runtime.session_epoch != epoch or not runtime.session_active:
         logger.info("observer: flight ended during the call, result discarded")
         return None
-
     t = runtime.drone.elapsed_time
     if _pilot_recording(t) and not force:
         logger.info("observer: the pilot started a note during the call, question dropped")
         return None
     if runtime.recorder:
-        runtime.recorder.record_observation({"t": t, "forced": force, **decision.model_dump()})
+        runtime.recorder.record_observation({"t": t, "forced": force, "why_now": moment.reasons, **decision.model_dump()})
     await broadcast({"type": "observation", "t": t, "observation": decision.observation, "asked": decision.ask_question})
 
+    attempts = runtime.attention_attempts.get(moment.key, 0) + 1
+    runtime.attention_attempts[moment.key] = attempts
     if not (decision.ask_question or force) or not decision.question:
+        if attempts >= MAX_ATTEMPTS_PER_MOMENT:
+            runtime.attention_consumed.add(moment.key)
         return None
+    runtime.attention_consumed.add(moment.key)
 
-    dev = learning.get("deviation")
-    if dev and decision.target_slot == dev["slot"]:
-        runtime.pending_deviation = None
-        return _push_question(t, decision.question, decision.target_slot, "deviation", decision.observation, dev)
-    return _push_question(t, decision.question, decision.target_slot or None, "observer", decision.observation)
+    slot = decision.target_slot or None
+    target = next((tg for tg in moment.targets if tg.slot == slot), None)
+    kind = target.kind if target else "rule"
+    dev = runtime.pending_deviation if kind == "deviation" else None
+    if kind == "deviation" and dev is None:
+        kind = "rule"
+    runtime.pending_deviation = None if dev else runtime.pending_deviation
+    hyp = target.hypothesis if target and kind == "hypothesis" else None
+    return _push_question(t, decision.question, slot, kind, decision.observation, deviation=dev, hypothesis=hyp)
+
+
+def _publish_attention(t: float, moment: attention.Moment | None) -> dict[str, Any] | None:
+    """The apprentice's state for the interface; returned only when it changed."""
+    cooldown = max(0.0, QUESTION_COOLDOWN_S - (t - runtime.last_question_time))
+    summary = moment.summary() if moment else {"score": 0.0, "ready": False, "reasons": [], "targets": []}
+    summary.update({
+        "cooldown_s": round(cooldown),
+        "thinking": runtime.observer_busy,
+        "waiting_answer": _awaiting_answer(t),
+        "follow_up": bool(runtime.pending_follow_up),
+    })
+    if summary == runtime.attention:
+        return None
+    runtime.attention = summary
+    return summary
 
 
 async def observer_loop() -> None:
     while True:
-        await asyncio.sleep(OBSERVER_INTERVAL_S)
+        await asyncio.sleep(OBSERVER_TICK_S)
         try:
             review_episodes()
+            if runtime.mode != "expert" or not runtime.session_active:
+                continue
             t = runtime.drone.elapsed_time
+            moment = assess(t)
+            changed = _publish_attention(t, moment)
+            if changed:
+                await broadcast({"type": "attention", **changed})
             if not _can_ask(t):
                 continue
             payload = None
             if runtime.pending_follow_up:
                 payload = _ask_follow_up(t)  # None while waiting for a calm moment
-            elif runtime.observer.is_available:
-                learning = learning_context(t)
-                if _has_learning_target(learning):
-                    payload = await observe_once(learning=learning)
+            elif (
+                runtime.observer.is_available
+                and moment is not None
+                and moment.score >= attention.ASK_THRESHOLD
+                and t - runtime.last_observer_call >= OBSERVER_INTERVAL_S
+                and t - runtime.attention_last_try.get(moment.key, -1e9) >= RETRY_DECLINED_S
+            ):
+                runtime.attention_last_try[moment.key] = t
+                payload = await observe_once(moment=moment)
             if payload:
                 await broadcast({"type": "question", **payload})
         except Exception:

@@ -1,143 +1,137 @@
+"""Expert vs novice comparison: deterministic scores, commentary written by Claude (structured output)."""
+
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from backend.core.config import SESSIONS_DIR
+from pydantic import BaseModel, Field
+
+from backend.core.config import CABLE_DANGER_M, DEBRIEF_MODEL, SESSIONS_DIR
 from backend.llm.client import LLMClient
 from backend.llm.summarizer import FlightSummarizer
+from backend.storage import competence_store
 from backend.storage.comparison_store import save_comparison
-from backend.storage.knowledge_store import get_knowledge
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "comparator.txt"
+logger = logging.getLogger("robot-apprentice.compare")
 
 
-def _fallback_comparison(expert_summary: dict[str, Any], novice_summary: dict[str, Any]) -> dict[str, Any]:
-    exp_inspected = set(expert_summary.get("insulators_inspected", []))
-    nov_inspected = set(novice_summary.get("insulators_inspected", []))
-    missed = sorted(list(exp_inspected - nov_inspected))
+class ComparisonNarrative(BaseModel):
+    coverage_commentary: str = Field(description="Inspection coverage and defects found or missed, compared.")
+    safety_commentary: str = Field(description="Standoff, violations, predicted conflicts, Guardian interventions, road crossings.")
+    hover_discipline: str = Field(description="Stability and dwell at the insulators.")
+    knowledge_adherence: str = Field(description="Did the novice apply the rules the expert taught?")
+    key_strengths: list[str] = Field(description="2 or 3 strengths of the novice flight.")
+    areas_for_improvement: list[str] = Field(description="2 or 3 actionable recommendations.")
+    instructor_verdict: str = Field(description="Final paragraph: readiness of the novice.")
 
-    nov_violations = int(novice_summary.get("safety_violations_count", 0))
-    nov_min_dist = float(novice_summary.get("min_cable_distance", 2.0))
-    exp_min_dist = float(expert_summary.get("min_cable_distance", 2.5))
 
-    # Calculate overall score
-    score = 100.0
-    if missed:
-        score -= len(missed) * 12.0
-    if nov_violations > 0:
-        score -= nov_violations * 15.0
-    if nov_min_dist < 1.8:
-        score -= 10.0
-    score = max(20.0, min(100.0, round(score, 1)))
-
-    compliance_rating = "Excellent" if nov_violations == 0 and nov_min_dist >= 2.0 else (
-        "Satisfactory" if nov_violations <= 2 else "Requires Retraining"
-    )
-
-    exp_dur = max(1.0, float(expert_summary.get("flight_duration_sec", 60.0)))
-    nov_dur = float(novice_summary.get("flight_duration_sec", 60.0))
-    time_ratio = round(nov_dur / exp_dur, 2)
-
-    return {
-        "expert_session_id": expert_summary.get("session_id", "expert"),
-        "novice_session_id": novice_summary.get("session_id", "novice"),
-        "overall_score": score,
-        "coverage_comparison": {
-            "expert_inspected_count": len(exp_inspected),
-            "novice_inspected_count": len(nov_inspected),
-            "missed_targets": missed,
-            "commentary": (
-                f"Novice inspected {len(nov_inspected)} of {len(exp_inspected)} targets covered by the expert. "
-                + (f"Missed components: {', '.join(missed)}." if missed else "All targets successfully checked!")
-            ),
-        },
-        "safety_compliance": {
-            "min_cable_distance_expert": exp_min_dist,
-            "min_cable_distance_novice": nov_min_dist,
-            "violations_novice": nov_violations,
-            "compliance_rating": compliance_rating,
-            "commentary": (
-                f"Novice maintained a minimum clearance of {nov_min_dist}m compared to {exp_min_dist}m by the expert. "
-                f"{nov_violations} clearance alerts were triggered."
-            ),
-        },
-        "technique_and_stability": {
-            "flight_duration_ratio": time_ratio,
-            "hover_discipline": (
-                "Novice exhibited disciplined hover stability during inspection sequences."
-                if nov_violations == 0 else "Novice showed slight drift when attempting to hold steady near cable sag."
-            ),
-            "knowledge_adherence": "Novice respected corridor altitude guidelines and slowed down near pylon arms as learned from the expert.",
-        },
-        "key_strengths": [
-            "Good corridor tracking along the catenary curve.",
-            "Appropriate vertical climb before crossing roadway.",
-        ],
-        "areas_for_improvement": [
-            "Maintain wider standoff margin (>2.5m) during transition between towers.",
-            "Avoid abrupt deceleration when approaching insulator brackets.",
-        ],
-        "instructor_verdict": (
-            f"The apprentice completed the mission with an overall performance score of {score}/100. "
-            f"Safety compliance is rated {compliance_rating}. "
-            "Ready for supervised field trials once clearance margins are consistently maintained."
-        ),
-    }
+def score(expert: dict[str, Any], novice: dict[str, Any]) -> tuple[float, str, list[str]]:
+    """Overall score (0-100), compliance rating and missed targets, from the measured metrics only."""
+    missed = sorted(set(expert.get("insulators_inspected", [])) - set(novice.get("insulators_inspected", [])))
+    violations = int(novice.get("safety_violations_count", 0))
+    min_dist = float(novice.get("min_cable_distance", 99.0))
+    value = 100.0
+    value -= 12.0 * len(missed)
+    value -= 15.0 * violations
+    value -= 8.0 * int(novice.get("guardian_interventions", 0))
+    value -= 5.0 * int(novice.get("low_road_crossings", 0))
+    value -= 4.0 * len(novice.get("defects_missed", []))
+    if min_dist < CABLE_DANGER_M:
+        value -= 10.0
+    value = max(5.0, min(100.0, round(value, 1)))
+    if violations == 0 and min_dist >= CABLE_DANGER_M and not novice.get("guardian_interventions"):
+        rating = "Excellent"
+    elif violations <= 2:
+        rating = "Satisfactory"
+    else:
+        rating = "Requires Retraining"
+    return value, rating, missed
 
 
 class FlightComparator:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self.client = client or LLMClient()
+        self.client = client or LLMClient(model=DEBRIEF_MODEL, purpose="debrief")
         self.summarizer = FlightSummarizer(self.client)
-        self.system_prompt = (
-            PROMPT_PATH.read_text(encoding="utf-8")
-            if PROMPT_PATH.exists()
-            else "You are a Chief Flight Instructor comparing drone flights."
-        )
+        self.system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+    def _summary(self, session_id: str) -> dict[str, Any]:
+        path = SESSIONS_DIR / session_id / "summary.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        return self.summarizer.generate_summary(session_id)
 
     def compare(self, expert_session_id: str, novice_session_id: str) -> dict[str, Any]:
-        exp_root = SESSIONS_DIR / expert_session_id
-        nov_root = SESSIONS_DIR / novice_session_id
+        expert = self._summary(expert_session_id)
+        novice = self._summary(novice_session_id)
+        overall, rating, missed = score(expert, novice)
+        rules = {k: e["rule"] for k, e in competence_store.load().items()}
 
-        # Load or generate expert summary
-        exp_summary_file = exp_root / "summary.json"
-        if exp_summary_file.exists():
-            exp_summary = json.loads(exp_summary_file.read_text(encoding="utf-8"))
-        else:
-            exp_summary = self.summarizer.generate_summary(expert_session_id)
-
-        # Load or generate novice summary
-        nov_summary_file = nov_root / "summary.json"
-        if nov_summary_file.exists():
-            nov_summary = json.loads(nov_summary_file.read_text(encoding="utf-8"))
-        else:
-            nov_summary = self.summarizer.generate_summary(novice_session_id)
-
-        knowledge = get_knowledge()
-
-        prompt = (
-            f"Knowledge Base (knowledge.md):\n{knowledge[:1500]}\n\n"
-            f"Expert Flight Summary:\n{json.dumps(exp_summary, indent=2)}\n\n"
-            f"Novice Flight Summary:\n{json.dumps(nov_summary, indent=2)}\n\n"
-            "Produce comparative evaluation report in strict JSON format."
-        )
-
-        comparison_json: dict[str, Any] = {}
+        narrative: ComparisonNarrative | None = None
         try:
             if self.client.is_available:
-                comparison_json = self.client.call_json(
-                    prompt=prompt,
+                narrative = self.client.parse(
+                    prompt=(
+                        f"Rules the expert taught (competence grid):\n{json.dumps(rules, ensure_ascii=False)}\n\n"
+                        f"Expert flight summary:\n{json.dumps(expert, ensure_ascii=False)}\n\n"
+                        f"Novice flight summary:\n{json.dumps(novice, ensure_ascii=False)}\n\n"
+                        f"Measured verdict: overall score {overall}/100, safety rating {rating}, "
+                        f"insulators the novice missed: {missed or 'none'}."
+                    ),
                     system=self.system_prompt,
+                    output_format=ComparisonNarrative,
+                    max_tokens=900,
                 )
         except Exception:
-            pass
+            logger.exception("Comparison narrative failed; using the deterministic report")
 
-        if not comparison_json or "overall_score" not in comparison_json:
-            comparison_json = _fallback_comparison(exp_summary, nov_summary)
+        if narrative is None:
+            narrative = ComparisonNarrative(
+                coverage_commentary=(
+                    f"Novice inspected {len(novice.get('insulators_inspected', []))} insulators against "
+                    f"{len(expert.get('insulators_inspected', []))} for the expert."
+                    + (f" Missed: {', '.join(missed)}." if missed else " No target missed.")
+                ),
+                safety_commentary=(
+                    f"Closest cable approach {novice.get('min_cable_distance')} m (expert {expert.get('min_cable_distance')} m), "
+                    f"{novice.get('safety_violations_count', 0)} violations, {novice.get('guardian_interventions', 0)} Guardian interventions."
+                ),
+                hover_discipline=f"Hover stability {novice.get('hover_stability_score', 0)}/10 (expert {expert.get('hover_stability_score', 0)}/10).",
+                knowledge_adherence="Compare the novice's distances and road crossings with the expert rules in the knowledge tab.",
+                key_strengths=["Completed the flight."],
+                areas_for_improvement=["Keep every standoff above the safety margins."],
+                instructor_verdict=f"Overall score {overall}/100, safety rated {rating}.",
+            )
 
-        # Save report
-        save_comparison(expert_session_id, novice_session_id, comparison_json)
-
-        return comparison_json
+        report = {
+            "expert_session_id": expert_session_id,
+            "novice_session_id": novice_session_id,
+            "overall_score": overall,
+            "coverage_comparison": {
+                "expert_inspected_count": len(expert.get("insulators_inspected", [])),
+                "novice_inspected_count": len(novice.get("insulators_inspected", [])),
+                "missed_targets": missed,
+                "commentary": narrative.coverage_commentary,
+            },
+            "safety_compliance": {
+                "min_cable_distance_expert": expert.get("min_cable_distance"),
+                "min_cable_distance_novice": novice.get("min_cable_distance"),
+                "violations_novice": novice.get("safety_violations_count", 0),
+                "guardian_interventions_novice": novice.get("guardian_interventions", 0),
+                "compliance_rating": rating,
+                "commentary": narrative.safety_commentary,
+            },
+            "technique_and_stability": {
+                "flight_duration_ratio": round(float(novice.get("flight_duration_sec", 0)) / max(1.0, float(expert.get("flight_duration_sec", 1))), 2),
+                "hover_discipline": narrative.hover_discipline,
+                "knowledge_adherence": narrative.knowledge_adherence,
+            },
+            "key_strengths": narrative.key_strengths,
+            "areas_for_improvement": narrative.areas_for_improvement,
+            "instructor_verdict": narrative.instructor_verdict,
+        }
+        save_comparison(expert_session_id, novice_session_id, report)
+        return report

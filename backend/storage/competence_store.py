@@ -104,7 +104,10 @@ def fill(
     session: str | None,
     t: float,
     about_deviation: bool,
+    observed_times: int = 0,
 ) -> dict[str, Any]:
+    """Store the merged rule of a slot. observed_times > 1: the pilot confirmed a habit the apprentice
+    had already seen that many times (a hypothesis), so the rule starts out confirmed."""
     with _lock:
         entries = load()
         entry = entries.get(key) or {"confidence": "once", "confirmations": 0, "evidence": {}, "answers": []}
@@ -113,6 +116,10 @@ def fill(
         if evidence and not (about_deviation and entry["evidence"]):
             entry["evidence"] = evidence
             entry["learned_in"] = {"session": session, "t": round(t, 1)}
+        if observed_times > 1:
+            entry["confirmations"] = max(entry.get("confirmations", 0), observed_times - 1)
+            entry["confidence"] = "confirmed"
+            entry["induced"] = True
         entry["answers"] = (entry.get("answers", []) + [{"q": question, "a": answer}])[-MAX_ANSWERS_KEPT:]
         entries[key] = entry
         _save(entries)
@@ -164,6 +171,53 @@ def review_episode(task: str, measured: dict[str, float], start: float, session:
         if changed:
             _save(entries)
     return results
+
+
+# ---- rule induction: a habit seen several times becomes a hypothesis to confirm ---------
+
+_HABIT_WORDS = {
+    "insulator_dist_median": lambda v: f"held about {v:.0f} metres from the insulator",
+    "cable_dz_median": lambda v: f"stayed about {abs(v):.0f} metres {'above' if v >= 0 else 'below'} the cable" if abs(v) >= 0.5 else "stayed level with the cable",
+    "cable_dist_median": lambda v: f"kept about {v:.0f} metres from the cable",
+    "duration_s": lambda v: f"held about {v:.0f} seconds",
+    "speed_median": lambda v: f"flew at about {v:.0f} metres per second",
+    "pylon_dist_min": lambda v: f"came no closer than about {v:.0f} metres to the tower",
+    "tree_dist_min": lambda v: f"kept at least {v:.0f} metres from the tree",
+    "altitude_median": lambda v: f"flew at about {v:.0f} metres",
+    "altitude_max": lambda v: f"climbed to about {v:.0f} metres",
+}
+_TASK_PLURAL = {
+    "preflight_takeoff": "take-offs", "corridor_transit": "transits along the line",
+    "structure_approach": "tower approaches", "insulator_inspection": "insulator inspections",
+    "conductor_inspection": "cable inspections", "road_crossing": "road crossings",
+    "vegetation": "passes near trees", "emergency": "close calls",
+}
+MIN_HABIT_EPISODES = 2
+
+
+def hypothesis(key: str, episodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """If the expert did the slot's measurable part the same way in every episode, the habit as a
+    rule to confirm: {"slot", "text", "evidence", "n"}. None if too few episodes or not consistent."""
+    metrics = SLOTS[key].get("evidence") or []
+    sigs = [e["signature"] for e in episodes if all(m in e["signature"] for m in metrics)]
+    if not metrics or len(sigs) < MIN_HABIT_EPISODES:
+        return None
+    evidence: dict[str, float] = {}
+    for m in metrics:
+        values = sorted(float(sig[m]) for sig in sigs)
+        median = values[len(values) // 2]
+        if any(abs(v - median) > _tolerance(m, median) for v in values):
+            return None  # not a habit (yet): the open question is better
+        evidence[m] = round(median, 1)
+    habit = " and ".join(_HABIT_WORDS[m](v) for m, v in evidence.items() if m in _HABIT_WORDS)
+    plural = _TASK_PLURAL.get(SLOTS[key]["task"], "times")
+    return {
+        "slot": key,
+        "text": f"In {len(sigs)} {plural} the pilot {habit}.",
+        "example_question": f"I noticed that in your last {len(sigs)} {plural} you {habit}: is that your rule, and what decides it?",
+        "evidence": evidence,
+        "n": len(sigs),
+    }
 
 
 # ---- views ---------------------------------------------------------------------------

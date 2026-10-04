@@ -4,6 +4,7 @@ You receive:
 - the question the pilot was asked, and their answer (often transcribed speech: ignore filler words and transcription slips). When there was no question, the pilot volunteered the remark: find the slot it fills;
 - target_slot: the slot the question was meant to fill, what it must capture, and what is already stored in it;
 - about_deviation: present when the question asked why the pilot did something differently from a rule they taught earlier;
+- about_hypothesis: present when the apprentice proposed a habit it had observed several times (with measured numbers) and asked whether it is the pilot's rule;
 - measured: what telemetry measured during that task (distances in metres, speeds in m/s);
 - all_slots: every slot of the grid.
 
@@ -13,6 +14,7 @@ Decide:
 - rule: the complete content of that slot after merging the answer into what is already stored. One or two sentences written as an instruction to a novice pilot ("When inspecting a string, hold 5 to 6 m away ... because ..."): when -> what to do -> why. Use the pilot's own numbers and words. Never write times, "this time" or "here": it must apply to any flight. Keep earlier content unless the pilot corrects it.
 - conditions: the situations that change the technique, merged with the ones already stored (short instructions such as "With no wind, you may go closer to see small cracks.", empty list if none). When about_deviation is present, what the pilot gives as the reason for doing it differently is a new condition, and the stored rule stays the rule.
 - reason: why the pilot does it, in a few words ("" if not given).
+- confirms_hypothesis: true if about_hypothesis is present and the pilot agreed it is their rule (even partly). The observed numbers then become part of the rule: they were measured and the pilot confirmed them. If the pilot corrected the numbers, use theirs.
 - vague: true if the answer does not give what the slot needs. A threshold slot needs a limit or a criterion; a cue slot needs what is actually seen; a condition or abort slot needs the triggering situation; a procedure slot needs the steps; an assessment slot needs the criterion or the level. "It is easier", "to check it", "to be safe" alone are vague.
 - follow_up: if vague, one short open question (at most 20 words, plain spoken English) asking for exactly the missing piece, as you would ask a busy pilot, without listing possible answers; otherwise "".
 

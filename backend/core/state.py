@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 from fastapi import WebSocket
 
+from backend.llm import usage
 from backend.llm.advisor import Advisor
 from backend.llm.comparator import FlightComparator
 from backend.llm.knowledge_manager import KnowledgeManager
@@ -17,6 +18,7 @@ from backend.sim.defects import generate_defects
 from backend.sim.detector import EventDetector
 from backend.sim.drone import DroneSim
 from backend.sim.flight_log import FlightLog
+from backend.sim.predictor import PredictiveMonitor, TrajectoryPredictor
 from backend.sim.scene import Scene
 from backend.storage.session_recorder import SessionRecorder
 
@@ -26,6 +28,8 @@ class SimRuntime:
     scene: Scene = field(default_factory=Scene)
     drone: DroneSim = field(init=False)
     detector: EventDetector = field(init=False)
+    predictor: TrajectoryPredictor = field(init=False)  # model-predictive safety (sim/predictor.py)
+    monitor: PredictiveMonitor = field(default_factory=PredictiveMonitor)
     camera: CameraManager = field(default_factory=CameraManager)
     flight_log: FlightLog = field(default_factory=FlightLog)
     mode: str = "expert"  # "expert" | "novice"
@@ -56,6 +60,15 @@ class SimRuntime:
     pending_deviation: dict[str, Any] | None = None
     # sim time the pilot started recording their own note; the apprentice doesn't ask meanwhile
     pilot_note_since: float | None = None
+    # attention model (llm/attention.py): moments already asked or declined, last summary for the UI
+    attention_consumed: set[str] = field(default_factory=set)
+    attention_attempts: dict[str, int] = field(default_factory=dict)  # LLM calls per moment
+    attention_last_try: dict[str, float] = field(default_factory=dict)
+    attention: dict[str, Any] | None = None
+    last_observer_call: float = -999.0
+    # novice-mode Guardian: takes the sticks for a moment when the predictor sees an imminent crash
+    guardian_enabled: bool = True
+    guardian_interventions: int = 0
     # bumped on every session start/stop; LLM results from an older epoch are discarded
     session_epoch: int = 0
 
@@ -63,10 +76,16 @@ class SimRuntime:
         self.scene.defects = generate_defects(self.scene)
         self.drone = DroneSim(self.scene)
         self.detector = EventDetector(self.scene)
+        self.predictor = TrajectoryPredictor(self.scene)
 
     @property
     def session_active(self) -> bool:
         return self.recorder is not None
+
+    @property
+    def guardian_active(self) -> bool:
+        """The Guardian only flies for novices, during a flight, when it is switched on."""
+        return self.guardian_enabled and self.session_active and self.mode in {"novice", "tutor"}
 
     def end_session(self) -> SessionRecorder | None:
         """Stop all AI activity immediately; in-flight LLM results will be discarded."""
@@ -77,6 +96,7 @@ class SimRuntime:
         self.pending_follow_up = None
         self.pending_deviation = None
         self.pilot_note_since = None
+        self.attention = None
         return recorder
 
     def reset(self, mode: str = "expert") -> None:
@@ -86,8 +106,17 @@ class SimRuntime:
         self.keys_down.clear()
         self.drone.reset()
         self.detector.reset()
+        self.predictor.reset()
+        self.monitor.reset()
         self.camera.reset()
         self.flight_log.reset()
+        self.attention_consumed.clear()
+        self.attention_attempts.clear()
+        self.attention_last_try.clear()
+        self.attention = None
+        self.last_observer_call = -999.0
+        self.guardian_interventions = 0
+        usage.reset_flight()
         self.qa_history.clear()
         self.observer_busy = False
         self.pending_follow_up = None

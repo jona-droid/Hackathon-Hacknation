@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.storage import competence_store
+from backend.storage import competence_store, episode_store
 from backend.storage.knowledge_store import get_knowledge, save_knowledge
 
 router = APIRouter(prefix="/knowledge", tags=["Knowledge"])
@@ -36,6 +36,8 @@ async def fetch_competence() -> dict[str, Any]:
 
 @router.delete("/competence")
 async def reset_competence() -> dict[str, Any]:
-    """Empty the grid to start learning from scratch (knowledge.md's other sections are kept)."""
+    """Empty the grid and the observed episodes to start learning from scratch (knowledge.md's other
+    sections are kept)."""
     competence_store.reset()
+    episode_store.reset()
     return competence_store.grid_view()

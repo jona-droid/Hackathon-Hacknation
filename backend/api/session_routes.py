@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.core.state import runtime
+from backend.llm import usage
 from backend.storage.comparison_store import list_comparisons
 from backend.storage.session_recorder import (
     get_session,
@@ -19,6 +20,10 @@ router = APIRouter(tags=["Sessions"])
 
 class StartSessionRequest(BaseModel):
     mode: str = "expert"  # "expert" | "novice"
+
+
+class GuardianRequest(BaseModel):
+    enabled: bool
 
 
 class CompareRequest(BaseModel):
@@ -55,7 +60,7 @@ async def session_stop() -> dict[str, Any]:
 
     # Generate flight summary
     try:
-        summary = await asyncio.to_thread(runtime.summarizer.generate_summary, sid)
+        summary = await asyncio.to_thread(runtime.summarizer.generate_summary, sid, usage.snapshot()["flight"])
     except Exception as e:
         summary = {"session_id": sid, "error": str(e)}
 
@@ -64,6 +69,19 @@ async def session_stop() -> dict[str, Any]:
         "mode": mode,
         "summary": summary,
     }
+
+
+@router.post("/guardian")
+async def set_guardian(payload: GuardianRequest) -> dict[str, Any]:
+    """Switch the novice-mode Guardian (predictive collision avoidance) on or off."""
+    runtime.guardian_enabled = payload.enabled
+    return {"enabled": runtime.guardian_enabled, "armed": runtime.guardian_active}
+
+
+@router.get("/ai/usage")
+async def ai_usage() -> dict[str, Any]:
+    """Claude calls, tokens and estimated cost: this flight and since the server started."""
+    return usage.snapshot()
 
 
 @router.get("/sessions")

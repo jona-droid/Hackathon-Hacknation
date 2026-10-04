@@ -98,6 +98,7 @@ async def _process_answer(question: str, answer: str) -> dict[str, Any]:
         answer=answer,
         target_slot=qa.get("slot"),
         deviation=qa.get("deviation"),
+        hypothesis=qa.get("hypothesis"),
         measured=measured,
         measured_task=measured_task,
         session=runtime.recorder.session_id if runtime.recorder else None,
@@ -205,6 +206,7 @@ async def _advise(query: str | None, event: dict[str, Any] | None = None) -> dic
         event=event,
         novice_query=query,
         mission=runtime.mission_context(),
+        prediction=runtime.flight_log.prediction,
     )
     runtime.latest_advice = advice
     runtime.last_advice_time = time.time()  # the next automatic tip must not talk over this answer

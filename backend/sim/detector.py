@@ -4,9 +4,12 @@ from collections import deque
 from typing import Any
 import numpy as np
 
+from backend.core.config import CABLE_CAUTION_M, CABLE_DANGER_M, ROAD_MIN_CROSSING_ALT_M, STRUCTURE_CAUTION_M
 from backend.sim.defects import SPOT_DWELL_S, can_see
 from backend.sim.drone import DroneSim
-from backend.sim.scene import Scene, nearest_cable_point
+from backend.sim.scene import Scene, clearances
+
+ROAD_APPROACH_M = 15.0  # a hover this close to the road, before crossing, is a traffic check
 
 
 class EventDetector:
@@ -27,6 +30,8 @@ class EventDetector:
         self.prev_compass = False
         self.defects_spotted: list[str] = []
         self.defect_view_time: dict[str, float] = {}
+        self._road: dict[str, float] | None = None  # stats of the road crossing in progress
+        self.road_check_s = 0.0  # hover time close to the road before the crossing
 
     def reset(self) -> None:
         self.prev_hover = False
@@ -44,6 +49,8 @@ class EventDetector:
         self.prev_compass = False
         self.defects_spotted.clear()
         self.defect_view_time.clear()
+        self._road = None
+        self.road_check_s = 0.0
 
     def update(self, drone: DroneSim, dt: float) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -51,14 +58,15 @@ class EventDetector:
         pos = drone.pos
         vel = drone.vel
         speed = drone.speed
-        _, cable_dist = nearest_cable_point(pos, self.scene)
+        c = clearances(pos, self.scene)
+        cable_dist = c["cable_dist"]
 
         hover = speed < 0.35 and pos[2] > 0.8
-        over_road = self.scene.road_x[0] <= pos[0] <= self.scene.road_x[1] and pos[2] < 22.0
-        near_tree = any(float(np.linalg.norm(pos[:2] - np.array([tx, ty]))) <= 4.5 for tx, ty, _, _ in self.scene.trees)
-        near_cable = cable_dist < 4.0
-        very_close = cable_dist < 1.8
         airborne = pos[2] > 0.4
+        over_road = bool(c["over_road"]) and airborne
+        near_tree = c["tree_dist"] < STRUCTURE_CAUTION_M
+        near_cable = cable_dist < CABLE_CAUTION_M
+        very_close = cable_dist < CABLE_DANGER_M
 
         # Flight lifecycle events
         if airborne and not self.prev_airborne:
@@ -93,10 +101,39 @@ class EventDetector:
                 "cable_dist": round(cable_dist, 2),
                 "severity": "high",
             })
+        # Road: how long the pilot hovered close to it first, then the crossing itself
+        if airborne and not over_road and c["road_dist"] < ROAD_APPROACH_M and speed < 0.6:
+            self.road_check_s += dt
+        elif c["road_dist"] > ROAD_APPROACH_M + 5.0:
+            self.road_check_s = 0.0
         if over_road and not self.prev_over_road:
-            events.append({"type": "over_road", "t": t, "altitude": round(pos[2], 2)})
+            low = bool(float(pos[2]) < ROAD_MIN_CROSSING_ALT_M)
+            events.append({"type": "over_road", "t": t, "altitude": round(float(pos[2]), 2), "low": low,
+                           "checked_before_s": round(self.road_check_s, 1)})
+            self._road = {"start": t, "min_alt": float(pos[2]), "speed_sum": 0.0, "n": 0, "slow_s": 0.0,
+                          "checked": self.road_check_s}
+        if over_road and self._road is not None:
+            self._road["min_alt"] = min(self._road["min_alt"], float(pos[2]))
+            self._road["speed_sum"] += speed
+            self._road["n"] += 1
+            if speed < 1.0:
+                self._road["slow_s"] += dt
+        if not over_road and self.prev_over_road and self._road is not None:
+            r = self._road
+            events.append({
+                "type": "road_crossed",
+                "t": t,
+                "time_over_road_s": round(t - r["start"], 1),
+                "min_altitude": round(r["min_alt"], 1),
+                "mean_speed": round(r["speed_sum"] / max(1, r["n"]), 1),
+                "hovered_over_road_s": round(r["slow_s"], 1),
+                "checked_before_s": round(r["checked"], 1),
+                "low": r["min_alt"] < ROAD_MIN_CROSSING_ALT_M,
+            })
+            self._road = None
+            self.road_check_s = 0.0
         if near_tree and not self.prev_near_tree:
-            events.append({"type": "near_tree", "t": t, "pos": pos.tolist()})
+            events.append({"type": "near_tree", "t": t, "tree_dist": round(c["tree_dist"], 2), "pos": pos.tolist()})
 
         # Sudden deceleration: speed fell from >= 3 m/s to < 1 m/s within 1.5 s (fires once per stop)
         self.recent_speeds.append((t, speed))

@@ -43,9 +43,10 @@
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
 
 ## 5. Expert Competence Grid
-Knowledge: 2/29 slots filled, 0 confirmed in later flights.
+Knowledge: 3/29 slots filled, 0 confirmed in later flights.
 
 ### Pre-flight checks, take-off and overview
+- **Route plan** (heard once): When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.
 - **Overview climb** (heard once): When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.
 
 ### Approach to a pylon

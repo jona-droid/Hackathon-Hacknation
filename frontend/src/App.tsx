@@ -12,6 +12,25 @@ import { API_URL } from "./config";
 const FRAME_MAX_WIDTH = 768;
 const TRAIL_SPACING_M = 0.5; // new path point once the drone has moved this far
 const TRAIL_MAX_POINTS = 6000;
+const FLIGHT_KEYS = ["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "shift", "w", "s", "a", "d", "q", "e"];
+
+type Tab = "ai" | "knowledge" | "debrief";
+
+function Logo() {
+  return (
+    <div className="logo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <path d="M13.5 2 5 13.5h6L9.5 22 19 9.5h-6.2L13.5 2z" fill="#3be8ff" />
+      </svg>
+    </div>
+  );
+}
+
+function clock(t: number) {
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `T+${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 
 export function App() {
   const [mode, setMode] = useState<"expert" | "novice">("expert");
@@ -19,11 +38,11 @@ export function App() {
   const [scene, setScene] = useState<SceneData | null>(null);
   const [keysDown, setKeysDown] = useState<Set<string>>(new Set());
   const [inspected, setInspected] = useState<Set<string>>(new Set());
-  const [warning, setWarning] = useState<string | null>(null);
-  const [tab, setTab] = useState<"voice" | "knowledge" | "comparison">("voice");
+  const [tab, setTab] = useState<Tab>("ai");
   const [kbRefreshKey, setKbRefreshKey] = useState<number>(0);
+  const [guardianOn, setGuardianOn] = useState(true);
 
-  const { state, events, latestQuestion, latestAdvice, latestObservation, sendKeys, sendFrame } = useSimSocket();
+  const { state, events, latestQuestion, latestAdvice, latestObservation, attention, connected, sendKeys, sendFrame } = useSimSocket();
   const lastFrameSendTime = useRef<number>(0);
 
   // Flight path since take-off: points spaced TRAIL_SPACING_M apart, cleared on Start or sim reset
@@ -53,17 +72,11 @@ export function App() {
     loadScene();
   }, []);
 
-  // Track events for insulator inspections and alerts
+  // Insulators turn green in 3D, on the radar and on the map as they are inspected
   useEffect(() => {
     const e = events[events.length - 1];
-    if (!e) return;
-    if (e.type === "insulator_inspected" && e.insulator_id) {
+    if (e?.type === "insulator_inspected" && e.insulator_id) {
       setInspected((prev) => new Set([...prev, String(e.insulator_id)]));
-    }
-    if (e.type === "very_close_cable") {
-      setWarning(`Proximity Alert: ${e.cable_dist ?? 1.5}m from conductor!`);
-    } else if (e.type === "collision") {
-      setWarning(`COLLISION${e.with ? ` with ${String(e.with)}` : ""}! Motors stopped.`);
     }
   }, [events]);
 
@@ -79,7 +92,7 @@ export function App() {
       if (now - lastFrameSendTime.current < 2000) return;
       lastFrameSendTime.current = now;
 
-      const canvas = document.querySelector<HTMLCanvasElement>("section.left canvas");
+      const canvas = document.querySelector<HTMLCanvasElement>("section.viewport canvas");
       const s = latestState.current;
       if (!canvas || !s || !canvas.width) return;
       try {
@@ -104,13 +117,17 @@ export function App() {
     if (kb) setKbRefreshKey((k) => k + 1);
   }, [kb?.filled, kb?.confirmed]);
 
-  // Session Start
   const startSession = async () => {
     // Ask for the microphone once here (a click is required); it is only switched on after each question.
-    if (mode === "expert" && !(await primeMicrophone())) {
-      alert("Microphone blocked: you can still type your answers. Allow the mic in the browser to answer by voice.");
+    if (!(await primeMicrophone())) {
+      console.warn("Microphone blocked: answers can still be typed.");
     }
     try {
+      await fetch(`${API_URL}/guardian`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: guardianOn }),
+      }).catch(() => {});
       const res = await fetch(`${API_URL}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -119,25 +136,34 @@ export function App() {
       const body = await res.json();
       setSessionId(body.session_id);
       setInspected(new Set());
-      setWarning(null);
       setTrail([]);
+      setTab("ai");
       loadScene();
+      (document.querySelector("section.viewport") as HTMLElement | null)?.focus();
     } catch (err) {
       console.error("Failed to start session:", err);
     }
   };
 
-  // Session Stop
   const stopSession = async () => {
     try {
       const res = await fetch(`${API_URL}/session/stop`, { method: "POST" });
       if (!res.ok) return;
       const body = await res.json();
       setSessionId(body.session_id);
-      setTab("comparison"); // Switch to comparison/summary tab upon completion
+      setTab("debrief");
     } catch (err) {
       console.error("Failed to stop session:", err);
     }
+  };
+
+  const toggleGuardian = async (enabled: boolean) => {
+    setGuardianOn(enabled);
+    await fetch(`${API_URL}/guardian`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }).catch(() => {});
   };
 
   // Keyboard controls synchronization
@@ -149,13 +175,8 @@ export function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "TEXTAREA" || (e.target as HTMLElement)?.tagName === "INPUT") return;
       const key = e.key.toLowerCase();
-      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "shift", "w", "s", "a", "d", "q", "e"].includes(key)) {
-        e.preventDefault();
-      }
-      setKeysDown((prev) => {
-        if (prev.has(key)) return prev;
-        return new Set([...prev, key]);
-      });
+      if (FLIGHT_KEYS.includes(key)) e.preventDefault();
+      setKeysDown((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
     };
     const onKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
@@ -182,101 +203,122 @@ export function App() {
   const sessionActive = !!state?.session_active;
   const pos = state?.pos ?? [-10, -10, 0];
   const yaw = state?.yaw ?? state?.rpy?.[2] ?? 0;
+  const usage = state?.ai_usage;
+  const defectsFound = (state?.defects_spotted ?? []).map((id) => {
+    const d = scene?.defects?.find((x) => x.id === id);
+    return d ? `${d.label} (${d.target})` : id;
+  });
 
   return (
     <div className="app">
-      <header>
+      <header className="topbar">
         <div className="brand">
-          <h2>⚡ Power Line AI Apprentice</h2>
-          <span className="subbrand">Drone Maintenance &amp; Operator Knowledge Transfer</span>
+          <Logo />
+          <div>
+            <h1>POWERLINE · AI APPRENTICE</h1>
+            <div className="brand-sub">Expert know-how capture · predictive safety</div>
+          </div>
         </div>
 
-        <div className="mode-toggle">
-          <label>Mode:</label>
-          <select value={mode} onChange={(e) => setMode(e.target.value as "expert" | "novice")}>
-            <option value="expert">Senior Operator (AI Learns)</option>
-            <option value="novice">Junior Operator (AI Coaches)</option>
-          </select>
-        </div>
-
-        <div className="header-actions">
-          <button className="btn-start" onClick={startSession}>
-            ▶ Start Flight
+        <div className="seg">
+          <button className={mode === "expert" ? "active" : ""} onClick={() => setMode("expert")} disabled={sessionActive}>
+            Expert
+            <small>AI learns</small>
           </button>
-          <button className="btn-stop" onClick={stopSession} disabled={!sessionActive}>
-            ⏹ End Flight
+          <button className={mode === "novice" ? "active" : ""} onClick={() => setMode("novice")} disabled={sessionActive}>
+            Novice
+            <small>AI coaches</small>
           </button>
         </div>
 
-        <span className="controls-hint">
-          W/S: fwd/back · A/D: strafe · Q/E: yaw · Space/Shift: climb/descend
-        </span>
+        {mode === "novice" && (
+          <label className="switch" title="Predictive collision avoidance for novices">
+            <input type="checkbox" checked={guardianOn} onChange={(e) => toggleGuardian(e.target.checked)} />
+            <span className="track" />
+            Guardian
+          </label>
+        )}
+
+        <div className="topbar-spacer" />
+
+        <div className="status-strip">
+          <span className={`chip ${connected ? "ok live" : "bad"}`}>
+            <span className="dot" />
+            {connected ? "Link" : "Offline"}
+          </span>
+          <span className="chip ai" title={usage ? `${usage.tokens} tokens, ${usage.cached_tokens} from cache` : ""}>
+            <span className="dot" />
+            AI {usage?.calls ?? 0} · ${(usage?.cost_usd ?? 0).toFixed(3)}
+          </span>
+        </div>
+        <div className="flight-clock">{sessionActive ? clock(state?.t ?? 0) : "T+--:--"}</div>
+        <button className="btn btn-launch" onClick={startSession}>
+          ▶ {sessionActive ? "Restart" : "Start flight"}
+        </button>
+        <button className="btn btn-abort" onClick={stopSession} disabled={!sessionActive}>
+          ■ End
+        </button>
       </header>
 
-      <main>
-        {/* Left Section: 3D Simulation & Flight Gauges */}
-        <section className="left" tabIndex={0}>
-          <Scene3D scene={scene} pos={pos} yaw={yaw} inspected={inspected} trail={trail} />
-          <Hud
-            state={state}
-            warning={warning}
-            insulatorCount={scene?.insulators.length ?? 6}
-            defectsFound={(state?.defects_spotted ?? []).map((id) => {
-              const d = scene?.defects?.find((x) => x.id === id);
-              return d ? `${d.label} (${d.target})` : id;
-            })}
-            mode={mode}
+      <main className="workspace">
+        <section className="viewport" tabIndex={0}>
+          <Scene3D
+            scene={scene}
+            pos={pos}
+            yaw={yaw}
+            inspected={inspected}
+            trail={trail}
+            prediction={sessionActive ? state?.prediction : null}
+            cablePoint={state?.nearest_cable_point}
+            cableDist={state?.cable_dist}
           />
-          <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} trail={trail} />
+          <Hud state={state} scene={scene} mode={mode} inspected={inspected} defectsFound={defectsFound} sessionActive={sessionActive} />
+          <div className="hud-card minimap-card" style={{ pointerEvents: "none" }}>
+            <div className="map-title">
+              <span className="eyebrow">Tactical map</span>
+              <span className="dim mono" style={{ fontSize: 10 }}>
+                {pos[0].toFixed(0)}, {pos[1].toFixed(0)}
+              </span>
+            </div>
+            <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} trail={trail} prediction={sessionActive ? state?.prediction : null} />
+          </div>
         </section>
 
-        {/* Right Section: Interaction Tabs */}
-        <section className="right">
+        <aside className="sidebar">
           <div className="tabs">
-            <button
-              className={tab === "voice" ? "active" : ""}
-              onClick={() => setTab("voice")}
-            >
-              🎙️ ElevenLabs Voice &amp; Dialogue
+            <button className={`tab ${tab === "ai" ? "active" : ""}`} onClick={() => setTab("ai")}>
+              {mode === "expert" ? "Apprentice" : "Tutor"}
             </button>
-            <button
-              className={tab === "knowledge" ? "active" : ""}
-              onClick={() => setTab("knowledge")}
-            >
-              📘 knowledge.md
+            <button className={`tab ${tab === "knowledge" ? "active" : ""}`} onClick={() => setTab("knowledge")}>
+              Knowledge
+              {kb && <span className="tab-badge">{kb.filled}/{kb.total}</span>}
             </button>
-            <button
-              className={tab === "comparison" ? "active" : ""}
-              onClick={() => setTab("comparison")}
-            >
-              📊 Debrief &amp; Compare
+            <button className={`tab ${tab === "debrief" ? "active" : ""}`} onClick={() => setTab("debrief")}>
+              Debrief
             </button>
           </div>
 
-          <div className="tab-content">
+          <div className="tab-body">
             {/* always mounted so End Flight can stop its audio/voice session even from another tab */}
             <VoicePanel
               mode={mode}
               sessionId={sessionId}
               simTime={state?.t ?? 0}
-              events={events as any}
               latestQuestion={latestQuestion}
               latestAdvice={latestAdvice}
               latestObservation={latestObservation}
+              attention={attention}
+              guardian={state?.guardian}
+              prediction={state?.prediction}
               sessionActive={sessionActive}
-              hidden={tab !== "voice"}
+              hidden={tab !== "ai"}
               onKnowledgeUpdated={() => setKbRefreshKey((k) => k + 1)}
             />
-
-            {tab === "knowledge" && <KnowledgeViewer refreshKey={kbRefreshKey} />}
-
-            {tab === "comparison" && (
-              <FlightComparison currentSessionId={sessionId} />
-            )}
+            {tab === "knowledge" && <KnowledgeViewer refreshKey={kbRefreshKey} currentTask={state?.task} />}
+            {tab === "debrief" && <FlightComparison currentSessionId={sessionId} />}
           </div>
-        </section>
+        </aside>
       </main>
     </div>
   );
 }
-

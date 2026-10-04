@@ -26,5 +26,19 @@
     "rule": "When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.",
     "conditions": [],
     "reason": "to spot visible problems on the cable and both sides before going close"
+  },
+  "preflight_takeoff.route_plan": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "What makes you choose one side of the line over the other, and which pylon you start with?",
+        "a": "Um, usually I always check both sides. I start on one side and then fly over the, the electrici-- uh, the high power lines and go check for the other side. As an example, now I just, uh, identified the, a bird nest which could be very dangerous, and we definitely need to remove that"
+      }
+    ],
+    "rule": "When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.",
+    "conditions": [],
+    "reason": ""
   }
 }

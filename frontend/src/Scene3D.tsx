@@ -1,7 +1,17 @@
-import { Line } from "@react-three/drei";
+import { Html, Line } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { memo, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Prediction } from "./useSimSocket";
+
+/** Safety margins shared with the backend (scene_json), so the HUD colours match the alarms. */
+export type Safety = {
+  cable_danger_m: number;
+  cable_caution_m: number;
+  structure_danger_m: number;
+  structure_caution_m: number;
+  road_min_crossing_alt_m: number;
+};
 
 export type SceneData = {
   pylons: Array<{ x: number; height: number }>;
@@ -12,6 +22,7 @@ export type SceneData = {
   tower?: Tower;
   canopy_radius?: number;
   defects?: Defect[];
+  safety?: Safety;
 };
 
 export type Defect = {
@@ -330,8 +341,80 @@ const World = memo(function World({ scene, inspected }: { scene: SceneData; insp
   );
 });
 
-export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: number; inspected: Set<string>; trail: number[][] }) {
-  const { scene, pos, yaw, inspected, trail } = props;
+const RISK_COLOR: Record<string, string> = { none: "#3be8ff", low: "#7fe9ff", medium: "#ffb547", high: "#ff4d6a" };
+
+/** The pilot's course over the next 3 s (model-predictive safety), dashes flowing forward. */
+function PredictedCourse({ prediction }: { prediction: Prediction }) {
+  const ref = useRef<any>(null);
+  useFrame((_, dt) => {
+    const mat = ref.current?.material;
+    if (mat) mat.dashOffset -= dt * 2.5;
+  });
+  const color = RISK_COLOR[prediction.risk] ?? RISK_COLOR.none;
+  const stop = prediction.stop_point;
+  return (
+    <>
+      {prediction.path.length > 1 && (
+        <Line ref={ref} points={prediction.path as V3[]} color={color} lineWidth={3} dashed dashSize={0.9} gapSize={0.5} transparent opacity={0.9} />
+      )}
+      {stop && (
+        <mesh position={stop as V3}>
+          <torusGeometry args={[0.7, 0.06, 8, 32]} />
+          <meshBasicMaterial color={color} transparent opacity={0.85} toneMapped={false} />
+        </mesh>
+      )}
+    </>
+  );
+}
+
+/** Augmented-reality tags floating over the insulators: id, status and distance from the drone. */
+function InsulatorTags({ insulators, inspected, pos }: { insulators: SceneData["insulators"]; inspected: Set<string>; pos: number[] }) {
+  return (
+    <>
+      {insulators.map((ins) => {
+        const d = Math.hypot(ins.pos[0] - pos[0], ins.pos[1] - pos[1], ins.pos[2] - pos[2]);
+        if (d > 90) return null;
+        const done = inspected.has(ins.id);
+        return (
+          <Html key={ins.id} position={[ins.pos[0], ins.pos[1], ins.pos[2] + 3.6]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+            <div className={`ar-tag ${done ? "done" : ""} ${d < 8 ? "near" : ""}`}>
+              <b>{ins.id.toUpperCase()}</b>
+              <span>{done ? "✓ INSPECTED" : "PENDING"}</span>
+              <em>{d.toFixed(0)} m</em>
+            </div>
+          </Html>
+        );
+      })}
+    </>
+  );
+}
+
+/** Pulsing marker on the closest point of the nearest cable when the drone is near it. */
+function CableThreat({ point, dist, caution }: { point: number[]; dist: number; caution: number }) {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (ref.current) ref.current.scale.setScalar(1 + 0.35 * Math.sin(clock.elapsedTime * 8));
+  });
+  if (dist >= caution) return null;
+  return (
+    <mesh ref={ref} position={point as V3}>
+      <sphereGeometry args={[0.35, 16, 12]} />
+      <meshBasicMaterial color={dist < caution / 2 ? "#ff4d6a" : "#ffb547"} transparent opacity={0.85} toneMapped={false} />
+    </mesh>
+  );
+}
+
+export function Scene3D(props: {
+  scene: SceneData | null;
+  pos: number[];
+  yaw: number;
+  inspected: Set<string>;
+  trail: number[][];
+  prediction?: Prediction | null;
+  cablePoint?: number[];
+  cableDist?: number;
+}) {
+  const { scene, pos, yaw, inspected, trail, prediction, cablePoint, cableDist } = props;
   // preserveDrawingBuffer: lets App capture camera frames with toDataURL (blank otherwise)
   return (
     <Canvas shadows camera={{ fov: 80, near: 0.05, far: 600 }} gl={{ preserveDrawingBuffer: true }}>
@@ -360,6 +443,9 @@ export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: nu
       {scene && <World scene={scene} inspected={inspected} />}
       {/* flight path since take-off */}
       {trail.length > 1 && <Line points={trail as V3[]} color="#ff8c00" lineWidth={2.5} transparent opacity={0.85} />}
+      {prediction && <PredictedCourse prediction={prediction} />}
+      {scene && <InsulatorTags insulators={scene.insulators} inspected={inspected} pos={pos} />}
+      {cablePoint && cableDist !== undefined && <CableThreat point={cablePoint} dist={cableDist} caution={scene?.safety?.cable_caution_m ?? 4} />}
     </Canvas>
   );
 }

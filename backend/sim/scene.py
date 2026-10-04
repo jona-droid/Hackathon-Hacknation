@@ -5,6 +5,14 @@ from dataclasses import dataclass, field
 from typing import Any
 import numpy as np
 
+from backend.core.config import (
+    CABLE_CAUTION_M,
+    CABLE_DANGER_M,
+    ROAD_MIN_CROSSING_ALT_M,
+    STRUCTURE_CAUTION_M,
+    STRUCTURE_DANGER_M,
+)
+
 
 def _vec(v: list[float] | tuple[float, ...] | np.ndarray) -> np.ndarray:
     return np.asarray(v, dtype=float)
@@ -113,14 +121,63 @@ def collision(pos: np.ndarray, scene: Scene) -> str | None:
             hw = TOWER_BASE_HALF_WIDTH - (TOWER_BASE_HALF_WIDTH - TOWER_TOP_HALF_WIDTH) * z / arm_z
             if dx < hw + r and ay < hw + r:
                 return "pylon"
-        elif z <= arm_z + TOWER_PEAK_ABOVE_CROSSARM and dx < 0.4 + r and ay < 0.4 + r:
+        elif z < arm_z + TOWER_PEAK_ABOVE_CROSSARM + r and dx < 0.4 + r and ay < 0.4 + r:
             return "pylon"
         if dx < 0.4 + r and ay < CROSSARM_HALF_SPAN + r and abs(z - arm_z) < 0.35 + r:
             return "pylon"  # crossarm
         for cy in scene.cable_y:
-            if dx < 0.3 + r and abs(y - cy) < 0.3 + r and scene.pylon_height - 0.2 < z < arm_z:
+            if dx < 0.3 + r and abs(y - cy) < 0.3 + r and scene.pylon_height - 0.2 - r < z < arm_z + r:
                 return "pylon"  # insulator string
     return None
+
+
+def _box_gap(*gaps: np.ndarray) -> np.ndarray:
+    """Distance outside a box given the signed gap along each axis (0 inside)."""
+    return np.maximum(np.maximum.reduce([np.asarray(g, dtype=float) for g in gaps]), 0.0)
+
+
+def hazard_distances(points: np.ndarray, scene: Scene) -> dict[str, np.ndarray]:
+    """Clearance from many points at once (shape (..., 3)) to the surface of each hazard, in metres.
+
+    Vectorised twin of collision() for the predictor: "cable" (to the conductor line), "tower"
+    (lattice body, peak, crossarm and insulator strings), "tree" (trunk and canopy), "road"
+    (0 = over the road) and "ground" (height). Box-shaped parts use the largest per-axis gap, the
+    same test as collision(): a clearance below DRONE_RADIUS (cable: CABLE_HIT_DIST) is a crash.
+    """
+    p = np.asarray(points, dtype=float)
+    x, y, z = p[..., 0], p[..., 1], p[..., 2]
+
+    cable = np.full(x.shape, np.inf)
+    for cy in scene.cable_y:
+        for x0, x1 in zip(scene.pylon_x[:-1], scene.pylon_x[1:]):
+            cx = np.clip(x, x0, x1)
+            mid, half = 0.5 * (x0 + x1), 0.5 * (x1 - x0)
+            cz = scene.pylon_height - scene.sag * (1.0 - ((cx - mid) / half) ** 2)
+            cable = np.minimum(cable, np.sqrt((x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2))
+
+    arm_z = scene.pylon_height + CROSSARM_ABOVE_CABLE
+    peak_z = arm_z + TOWER_PEAK_ABOVE_CROSSARM
+    tower = np.full(x.shape, np.inf)
+    for px in scene.pylon_x:
+        dx, ay = np.abs(x - px), np.abs(y)
+        zc = np.clip(z, 0.0, arm_z)
+        hw = np.where(z <= arm_z, TOWER_BASE_HALF_WIDTH - (TOWER_BASE_HALF_WIDTH - TOWER_TOP_HALF_WIDTH) * zc / arm_z, 0.4)
+        body = _box_gap(dx - hw, ay - hw, z - peak_z)  # tapered body, then the peak
+        arm = _box_gap(dx - 0.4, ay - CROSSARM_HALF_SPAN, np.abs(z - arm_z) - 0.35)
+        tower = np.minimum(tower, np.minimum(body, arm))
+        for cy in scene.cable_y:  # insulator strings hanging from the crossarm
+            string = _box_gap(dx - 0.3, np.abs(y - cy) - 0.3, np.maximum(scene.pylon_height - 0.2 - z, z - arm_z))
+            tower = np.minimum(tower, string)
+
+    tree = np.full(x.shape, np.inf)
+    for tx, ty, tr, th in scene.trees:
+        trunk = _box_gap(np.hypot(x - tx, y - ty) - tr, z - th)
+        canopy = np.maximum(np.sqrt((x - tx) ** 2 + (y - ty) ** 2 + (z - th - 2.0) ** 2) - TREE_CANOPY_RADIUS, 0.0)
+        tree = np.minimum(tree, np.minimum(trunk, canopy))
+
+    r0, r1 = scene.road_x
+    road = np.maximum(np.maximum(r0 - x, x - r1), 0.0)
+    return {"cable": cable, "tower": tower, "tree": tree, "road": road, "ground": z}
 
 
 def _segment_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
@@ -196,5 +253,13 @@ def scene_json(scene: Scene) -> dict[str, Any]:
             "peak_z": scene.pylon_height + CROSSARM_ABOVE_CABLE + TOWER_PEAK_ABOVE_CROSSARM,
         },
         "canopy_radius": TREE_CANOPY_RADIUS,
+        # one set of thresholds for the HUD colours, the alarms and the debrief
+        "safety": {
+            "cable_danger_m": CABLE_DANGER_M,
+            "cable_caution_m": CABLE_CAUTION_M,
+            "structure_danger_m": STRUCTURE_DANGER_M,
+            "structure_caution_m": STRUCTURE_CAUTION_M,
+            "road_min_crossing_alt_m": ROAD_MIN_CROSSING_ALT_M,
+        },
         "defects": [{k: d[k] for k in ("id", "kind", "label", "component", "target", "pos", "disc", "seed") if k in d} for d in scene.defects],
     }

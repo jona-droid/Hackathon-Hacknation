@@ -48,7 +48,7 @@
       "id": "structure_approach",
       "name": "Approach to a pylon",
       "short": "Tower approach",
-      "detect": "within 10 m of a tower, not hovering at an insulator",
+      "detect": "within 10 m of a tower and not moving away from it, not hovering at an insulator",
       "measured": ["approach speed", "stopping distance", "approach direction and height"],
       "slots": [
         {"id": "approach_path", "label": "Approach path", "type": "procedure", "learn": "Direction, height and speed of the final approach to a tower, and where to stop first", "ask_example": "When you come up to a tower, from which direction and height do you like to arrive, and why?", "evidence": ["speed_median", "cable_dz_median"]},
@@ -109,7 +109,7 @@
       "id": "road_crossing",
       "name": "Crossing a road",
       "short": "Road crossing",
-      "detect": "within 4 m of the road or over it",
+      "detect": "within 8 m of the road (including a pause to check the traffic) or over it",
       "measured": ["height while crossing", "time over the road", "crossing angle"],
       "slots": [
         {"id": "crossing_rule", "label": "Crossing rule", "type": "procedure", "learn": "How a road is crossed: height, crossing straight and quickly, never hovering above traffic", "ask_example": "What is your rule for crossing a road with the drone?", "evidence": ["altitude_median", "speed_median"]},
