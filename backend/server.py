@@ -11,6 +11,7 @@ from backend.api import dialogue_router, knowledge_router, session_router, ws_ro
 from backend.api.observer import observer_loop
 from backend.core.config import BROADCAST_HZ, SIM_HZ
 from backend.core.state import runtime
+from backend.llm.advisor import safety_alert
 from backend.sim.scene import scene_json
 from backend.storage import competence_store
 
@@ -34,18 +35,38 @@ app.include_router(knowledge_router)
 app.include_router(ws_router)
 
 
+# Events after which the novice tutor (LLM) gives a tip; cable proximity is handled by _check_novice_safety
 ADVICE_TRIGGER_EVENTS = {
+    "takeoff",
     "near_cable",
-    "very_close_cable",
     "over_road",
     "hover_start",
+    "insulator_inspected",
+    "defect_spotted",
+    "mission_complete",
     "collision",
+    "coaching_check",  # the tutor has been quiet for COACHING_IDLE_S: say what to do next
 }
+ADVICE_MIN_GAP_S = 6.0
+SAFETY_REPEAT_S = 4.0  # a proximity alert is repeated while the danger lasts
+COACHING_IDLE_S = 15.0
+
+
+async def _send_advice(advice: dict[str, Any], t: float) -> None:
+    runtime.latest_advice = advice
+    await broadcast({"type": "advice", **advice})
+    if runtime.recorder:
+        runtime.recorder.record_transcript({
+            "role": "tutor_model",
+            "text": advice.get("speech", ""),
+            "t": t,
+            "advice": advice,
+        })
 
 
 async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) -> None:
     now = time.time()
-    if ev.get("type") in ADVICE_TRIGGER_EVENTS and (now - runtime.last_advice_time > 6.0):
+    if ev.get("type") in ADVICE_TRIGGER_EVENTS and (now - runtime.last_advice_time > ADVICE_MIN_GAP_S):
         runtime.last_advice_time = now
         epoch = runtime.session_epoch
         try:
@@ -55,20 +76,32 @@ async def _handle_novice_event(ev: dict[str, Any], telemetry: dict[str, Any]) ->
                 telemetry=telemetry,
                 image_b64=frame,
                 event=ev,
+                mission=runtime.mission_context(),
             )
             if runtime.session_epoch != epoch or not runtime.session_active:
                 return  # flight ended while the tutor was thinking
-            runtime.latest_advice = advice_res
-            await broadcast({"type": "advice", **advice_res})
-            if runtime.recorder:
-                runtime.recorder.record_transcript({
-                    "role": "tutor_model",
-                    "text": advice_res.get("speech", ""),
-                    "t": telemetry["t"],
-                    "advice": advice_res,
-                })
+            if runtime.last_safety_time > now:
+                return  # a proximity alert was spoken meanwhile: this tip is stale
+            await _send_advice(advice_res, telemetry["t"])
         except Exception:
             logger.exception("Error generating novice advice")
+
+
+async def _check_novice_safety(state: dict[str, Any]) -> None:
+    """Instant spoken alert when a cable is dangerously close: no LLM, no tip cooldown."""
+    if state["altitude"] < 0.4 or state["collided"]:
+        return
+    alert = safety_alert(state)
+    if alert is None:
+        return
+    now = time.time()
+    escalation = alert["urgency"] == "high" and runtime.last_safety_urgency != "high"
+    if now - runtime.last_safety_time < SAFETY_REPEAT_S and not escalation:
+        return
+    runtime.last_safety_time = now
+    runtime.last_safety_urgency = alert["urgency"]
+    runtime.last_advice_time = now  # the next tip waits instead of talking over the alert
+    await _send_advice(alert, state["t"])
 
 
 async def sim_loop() -> None:
@@ -98,6 +131,11 @@ async def sim_loop() -> None:
                 # Expert questions come from the periodic observer (backend/api/observer.py)
                 if runtime.session_active and runtime.mode in {"novice", "tutor"}:
                     asyncio.create_task(_handle_novice_event(ev, state))
+
+            if runtime.session_active and runtime.mode in {"novice", "tutor"}:
+                await _check_novice_safety(state)
+                if state["altitude"] > 0.4 and time.time() - runtime.last_advice_time > COACHING_IDLE_S:
+                    asyncio.create_task(_handle_novice_event({"type": "coaching_check", "t": state["t"]}, state))
 
             if runtime.recorder:
                 runtime.recorder.record_state(state["t"], state)

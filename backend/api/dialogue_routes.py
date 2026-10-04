@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 import logging
 from typing import Any
 import httpx2 as httpx
@@ -144,6 +145,23 @@ def _transcribe(audio: bytes, content_type: str) -> str:
     return resp.json().get("text", "").strip()
 
 
+async def _transcribe_request(request: Request) -> str:
+    """Request body = recorded audio; returns its ElevenLabs transcript ("" if nothing was understood)."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured on the server.")
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="No audio received")
+    try:
+        return await asyncio.to_thread(_transcribe, audio, request.headers.get("content-type", "audio/webm"))
+    except httpx.HTTPStatusError as e:
+        logger.error(f"ElevenLabs speech-to-text error: {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"Speech-to-text failed: {e.response.text}")
+    except httpx.TransportError as e:
+        logger.error(f"Cannot reach ElevenLabs: {e}")
+        raise HTTPException(status_code=502, detail=f"Cannot reach ElevenLabs (network or certificate problem): {e}")
+
+
 @router.post("/dialogue/pilot-note")
 async def pilot_note(active: bool) -> dict[str, Any]:
     """The pilot pressed Record a note (or abandoned it): the apprentice stops asking meanwhile."""
@@ -161,19 +179,7 @@ async def receive_voice_answer(request: Request, question: str = "") -> dict[str
     Transcribed by ElevenLabs, then processed like a typed answer."""
     if not question:
         runtime.pilot_note_since = None  # the note is recorded: the apprentice may ask again
-    if not ELEVENLABS_API_KEY:
-        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured on the server.")
-    audio = await request.body()
-    if not audio:
-        raise HTTPException(status_code=400, detail="No audio received")
-    try:
-        transcript = await asyncio.to_thread(_transcribe, audio, request.headers.get("content-type", "audio/webm"))
-    except httpx.HTTPStatusError as e:
-        logger.error(f"ElevenLabs speech-to-text error: {e.response.text}")
-        raise HTTPException(status_code=502, detail=f"Speech-to-text failed: {e.response.text}")
-    except httpx.TransportError as e:
-        logger.error(f"Cannot reach ElevenLabs: {e}")
-        raise HTTPException(status_code=502, detail=f"Cannot reach ElevenLabs (network or certificate problem): {e}")
+    transcript = await _transcribe_request(request)
     if not transcript:
         if question:
             _close_pending_question("(no answer)")
@@ -188,8 +194,7 @@ async def skip_question() -> dict[str, Any]:
     return {"ok": True}
 
 
-@router.post("/dialogue/advise")
-async def request_advice(payload: AdviseRequest) -> dict[str, Any]:
+async def _advise(query: str | None, event: dict[str, Any] | None = None) -> dict[str, Any]:
     telemetry = runtime.drone.snapshot()
     frame = runtime.camera.get_latest_frame()
 
@@ -197,17 +202,19 @@ async def request_advice(payload: AdviseRequest) -> dict[str, Any]:
         runtime.advisor.advise,
         telemetry=telemetry,
         image_b64=frame,
-        event=payload.event,
-        novice_query=payload.query,
+        event=event,
+        novice_query=query,
+        mission=runtime.mission_context(),
     )
     runtime.latest_advice = advice
+    runtime.last_advice_time = time.time()  # the next automatic tip must not talk over this answer
 
     # Record to transcript
     if runtime.recorder:
-        if payload.query:
+        if query:
             runtime.recorder.record_transcript({
                 "role": "novice_operator",
-                "text": payload.query,
+                "text": query,
                 "t": telemetry["t"],
             })
         runtime.recorder.record_transcript({
@@ -218,6 +225,21 @@ async def request_advice(payload: AdviseRequest) -> dict[str, Any]:
         })
 
     return advice
+
+
+@router.post("/dialogue/advise")
+async def request_advice(payload: AdviseRequest) -> dict[str, Any]:
+    return await _advise(payload.query, payload.event)
+
+
+@router.post("/dialogue/voice-advise")
+async def voice_advise(request: Request) -> dict[str, Any]:
+    """Novice asked the tutor out loud. Body = the recorded question, transcribed by ElevenLabs."""
+    runtime.last_advice_time = time.time()  # automatic tips wait while the pilot is asking
+    transcript = await _transcribe_request(request)
+    if not transcript:
+        return {"transcript": ""}
+    return {"transcript": transcript, **await _advise(transcript)}
 
 
 @router.post("/session/{session_id}/frame")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 from fastapi import WebSocket
 
 from backend.llm.advisor import Advisor
@@ -42,6 +45,8 @@ class SimRuntime:
     latest_advice: dict[str, Any] | None = None
     last_question_time: float = -999.0
     last_advice_time: float = -999.0
+    last_safety_time: float = -999.0  # instant cable-proximity alert (novice mode)
+    last_safety_urgency: str = ""
     # observer questions: [{"t", "question", "answer" (None until answered), "slot", "kind", "deviation"}]
     qa_history: list[dict[str, Any]] = field(default_factory=list)
     observer_busy: bool = False
@@ -92,6 +97,46 @@ class SimRuntime:
         self.latest_advice = None
         self.last_question_time = -999.0
         self.last_advice_time = -999.0
+        self.last_safety_time = -999.0
+        self.last_safety_urgency = ""
+
+    def mission_context(self) -> dict[str, Any]:
+        """What is left to do, for the novice tutor: insulators not yet inspected, nearest first."""
+        pos, yaw = self.drone.pos, self.drone.yaw
+        remaining = []
+        for ins in self.scene.insulators:
+            if ins["id"] in self.detector.inspected:
+                continue
+            d = np.asarray(ins["pos"], dtype=float) - pos
+            bearing = (math.degrees(math.atan2(d[1], d[0]) - yaw) + 180.0) % 360.0 - 180.0  # >0: to the left
+            remaining.append({
+                "id": ins["id"],
+                "name": ins.get("name", ins["id"]),
+                "distance_m": round(float(np.linalg.norm(d)), 1),
+                "direction": _direction_words(bearing),
+                "height_above_drone_m": round(float(d[2]), 1),
+            })
+        remaining.sort(key=lambda r: r["distance_m"])
+        return {
+            "inspected": sorted(self.detector.inspected),
+            "remaining_insulators": remaining,
+            "defects_spotted": len(self.detector.defects_spotted),
+        }
+
+
+def _direction_words(bearing_deg: float) -> str:
+    """Relative bearing (degrees, positive = left) in words a pilot can act on."""
+    side = "left" if bearing_deg > 0 else "right"
+    b = abs(bearing_deg)
+    if b < 20:
+        return "straight ahead"
+    if b < 70:
+        return f"ahead to your {side}"
+    if b < 110:
+        return f"to your {side}"
+    if b < 160:
+        return f"behind you to the {side}"
+    return "behind you"
 
 
 runtime = SimRuntime()
