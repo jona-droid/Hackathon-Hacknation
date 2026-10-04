@@ -215,8 +215,7 @@ export function App() {
         <div className="brand">
           <Logo />
           <div>
-            <h1>POWERLINE · AI APPRENTICE</h1>
-            <div className="brand-sub">Expert know-how capture · predictive safety</div>
+            <h1>AI APPRENTICE</h1>
           </div>
         </div>
 

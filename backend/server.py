@@ -140,7 +140,7 @@ async def _sim_step(dt: float, tick: int, predict_every: int) -> tuple[dict[str,
     # Predict from the pilot's own command, then let the Guardian override it if a crash is imminent
     prediction = runtime.predictor.predict(runtime.drone) if tick % predict_every == 0 else None
     guardian = runtime.predictor.apply_guardian(runtime.drone) if runtime.guardian_active else None
-    runtime.drone.step(dt, wind_enabled=True)
+    runtime.drone.step(dt, wind_enabled=False)
 
     events = runtime.detector.update(runtime.drone, dt)
     state = runtime.drone.snapshot()

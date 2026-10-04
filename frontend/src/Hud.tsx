@@ -1,5 +1,3 @@
-import { Radar } from "./Radar";
-import { Ring } from "./Ring";
 import { SceneData, Safety } from "./Scene3D";
 import { Prediction, SimState } from "./useSimSocket";
 
@@ -136,14 +134,10 @@ export function Hud({
   sessionActive: boolean;
 }) {
   const safety = scene?.safety ?? DEFAULT_SAFETY;
-  const pos = state?.pos ?? [-10, -10, 0];
   const yaw = state?.yaw ?? 0;
   const heading = state?.heading_deg ?? ((90 - (yaw * 180) / Math.PI) % 360 + 360) % 360;
   const prediction = state?.prediction;
   const alert = alertFor(state, prediction);
-  const kb = state?.knowledge;
-  const windFrom = state?.wind_from_deg ?? 0;
-  const compassBad = (state?.compass_interference ?? 0) > 0.3;
   const cableZ = state?.nearest_cable_point?.[2];
   const roadNear = (state?.road_dist ?? 99) < 30;
 
@@ -167,30 +161,6 @@ export function Hud({
           {alert.action && <span className="alert-action">{alert.action}</span>}
         </div>
       )}
-
-      {/* flight card: mode, task, knowledge */}
-      <div className="hud-card flight-card">
-        <div className="fc-row">
-          <span className="eyebrow">{mode === "expert" ? "Expert · AI learns" : "Novice · AI coaches"}</span>
-          {sessionActive && <span className="chip ok live" style={{ padding: "2px 8px" }}><span className="dot" />Live</span>}
-        </div>
-        <div>
-          <div className="dim" style={{ fontSize: 10, letterSpacing: "0.16em", fontWeight: 700 }}>CURRENT TASK</div>
-          <div className={`fc-task ${state?.task_name ? "" : "idle"}`}>{state?.task_name ?? "Standing by"}</div>
-        </div>
-        {kb && (
-          <div className="ring-wrap">
-            <Ring value={kb.filled} total={kb.total} secondary={kb.confirmed} />
-            <div className="ring-label">
-              <span>Knowledge</span>
-              <strong>
-                {kb.filled}/{kb.total}
-              </strong>
-              <em>{kb.confirmed} confirmed in flight</em>
-            </div>
-          </div>
-        )}
-      </div>
 
       <Tape
         side="left"
@@ -229,17 +199,6 @@ export function Hud({
 
       {/* status */}
       <div className="hud-card status-card">
-        <div className={`st-row ${compassBad ? "bad" : ""}`}>
-          <span>Nav</span>
-          <strong>{compassBad ? "COMPASS ERR" : state?.position_hold ? "GPS HOLD" : "GPS"}</strong>
-        </div>
-        <div className="st-row">
-          <span>Wind</span>
-          <strong>
-            <span className="wind-arrow" style={{ transform: `rotate(${windFrom + 180 - heading}deg)` }}>↑</span>
-            {(state?.wind_speed ?? 0).toFixed(1)} m/s · {windFrom.toFixed(0)}°
-          </strong>
-        </div>
         <div className="st-row">
           <span>Inspected</span>
           <div className="pips">
@@ -274,7 +233,6 @@ export function Hud({
 
       {/* sensors */}
       <div className="hud-card sensors">
-        <Radar scene={scene} pos={pos} yaw={yaw} inspected={inspected} prediction={prediction} />
         <div className="prox">
           <div className="eyebrow" style={{ fontSize: 10 }}>Proximity</div>
           {prox.map((p) => {

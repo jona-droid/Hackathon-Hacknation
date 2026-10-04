@@ -12,8 +12,8 @@ You do not watch the flight continuously. A local attention model scores every s
 - The drone takes off from (-10, -10).
 
 ## Flight physics
-- There is a steady wind (direction in now.wind_from_deg, same convention as heading: 0 = +y, 90 = +x) with gusts, stronger with height. now.upwind_of_cable = true means a gust would push the drone towards the cable.
-- With the sticks released, the drone brakes and holds its position and altitude (GPS hold), so small drift while hovering is wind, not pilot input. From full speed (12 m/s) it needs about 11 m to stop.
+- There is no wind: the air is calm.
+- With the sticks released, the drone brakes and holds its position and altitude (GPS hold), so drift while hovering comes from pilot input or compass interference. From full speed (12 m/s) it needs about 11 m to stop.
 - Near a cable the high-voltage field disturbs the compass: the heading slowly wanders and the sticks push in a slightly wrong direction. Pilots correct with yaw or keep more distance.
 
 ## What you receive

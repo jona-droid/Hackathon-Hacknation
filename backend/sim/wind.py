@@ -24,9 +24,9 @@ class Wind:
     gust: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
     def reset(self, rng: random.Random | None = None) -> None:
-        rng = rng or random
-        self.mean_speed = rng.uniform(2.0, 6.0)
-        self.from_heading_deg = rng.uniform(0.0, 360.0)
+        # Wind is disabled in the simulator: every flight is in calm air
+        self.mean_speed = 0.0
+        self.from_heading_deg = 0.0
         self.gust = np.zeros(3)
 
     @property

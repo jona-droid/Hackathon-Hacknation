@@ -407,7 +407,6 @@ kbd {
 .st-row.warn strong { color: var(--amber); }
 .st-row.bad strong { color: var(--red); }
 .st-row.ai strong { color: var(--violet); }
-.wind-arrow { display: inline-block; color: var(--cyan); margin-right: 4px; }
 .pips { display: flex; gap: 4px; }
 .pip { width: 22px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-family: var(--font-mono); font-size: 9px; color: var(--text-3); border: 1px solid var(--line-2); }
 .pip.done { color: #02150c; background: var(--green); border-color: var(--green); box-shadow: var(--glow-green); }
@@ -429,7 +428,7 @@ kbd {
 .prox-row.caution .prox-val { color: var(--amber); }
 
 /* tactical minimap (bottom right) */
-.minimap-card { right: 12px; bottom: 12px; width: 330px; padding: 8px 10px 10px; }
+.minimap-card { right: 12px; bottom: 12px; width: 240px; padding: 8px 10px 10px; }
 .minimap-card .map-title { display: flex; justify-content: space-between; margin-bottom: 6px; }
 .minimap { display: block; width: 100%; height: auto; border-radius: 8px; }
 
@@ -619,7 +618,7 @@ kbd {
 @media (max-width: 1280px) {
   .workspace { grid-template-columns: minmax(0, 1fr) 380px; }
   .brand-sub, .flight-clock { display: none; }
-  .minimap-card { width: 250px; }
+  .minimap-card { width: 190px; }
 }
 
 /* AR tags over the insulators (DOM, so they never appear in the camera frames sent to the AI) */

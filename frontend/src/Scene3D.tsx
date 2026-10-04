@@ -351,20 +351,8 @@ function PredictedCourse({ prediction }: { prediction: Prediction }) {
     if (mat) mat.dashOffset -= dt * 2.5;
   });
   const color = RISK_COLOR[prediction.risk] ?? RISK_COLOR.none;
-  const stop = prediction.stop_point;
-  return (
-    <>
-      {prediction.path.length > 1 && (
-        <Line ref={ref} points={prediction.path as V3[]} color={color} lineWidth={3} dashed dashSize={0.9} gapSize={0.5} transparent opacity={0.9} />
-      )}
-      {stop && (
-        <mesh position={stop as V3}>
-          <torusGeometry args={[0.7, 0.06, 8, 32]} />
-          <meshBasicMaterial color={color} transparent opacity={0.85} toneMapped={false} />
-        </mesh>
-      )}
-    </>
-  );
+  if (prediction.path.length < 2) return null;
+  return <Line ref={ref} points={prediction.path as V3[]} color={color} lineWidth={3} dashed dashSize={0.9} gapSize={0.5} transparent opacity={0.9} />;
 }
 
 /** Augmented-reality tags floating over the insulators: id, status and distance from the drone. */
