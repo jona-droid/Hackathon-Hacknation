@@ -1,0 +1,37 @@
+{
+  "expert_session_id": "expert-ccedc52f",
+  "novice_session_id": "novice-d3cf7752",
+  "overall_score": 28.0,
+  "coverage_comparison": {
+    "expert_inspected_count": 1,
+    "novice_inspected_count": 0,
+    "missed_targets": [
+      "i4"
+    ],
+    "commentary": "The novice achieved 0% inspection coverage, missing all insulators including i4 which the expert successfully inspected; consequently, the novice found zero defects while the expert found two out of five total defects present, demonstrating a critical gap in execution of the systematic inspection plan."
+  },
+  "safety_compliance": {
+    "min_cable_distance_expert": 2.29,
+    "min_cable_distance_novice": 2.41,
+    "violations_novice": 0,
+    "guardian_interventions_novice": 6,
+    "compliance_rating": "Satisfactory",
+    "commentary": "The novice maintained a minimum cable distance of 2.41 m (above the expert's 2.29 m) with zero safety violations, but required six Guardian interventions to prevent crashes during the 67-second flight, suggesting instability in approach execution; no road crossings were attempted, so road safety could not be evaluated."
+  },
+  "technique_and_stability": {
+    "flight_duration_ratio": 0.39,
+    "hover_discipline": "The novice achieved a hover stability score of 9.2, slightly higher than the expert's 8.6, but failed to dwell at any insulator; the six Guardian interventions indicate the novice lacked the discipline to hold position for inspection despite superior raw stability metrics.",
+    "knowledge_adherence": "The novice did not apply the core rules taught: the preflight overview and systematic two-side inspection plan (route_plan) were not executed, no insulators were reached for inspection standoff (inspection_standoff), and no questions were asked to confirm understanding of defect severity or tree clearance; the tutor delivered 12 messages but the novice did not translate them into flight actions."
+  },
+  "key_strengths": [
+    "Excellent raw hover stability score of 9.2 demonstrates smooth stick control and drone responsiveness under the novice's command.",
+    "Maintained safe cable standoff distance of 2.41 m throughout the flight with zero safety violations, showing basic collision avoidance awareness.",
+    "Low predicted conflicts count of 2 (versus expert's 5) suggests the novice's shorter, simpler flight path minimized navigation hazards."
+  ],
+  "areas_for_improvement": [
+    "Execute the preflight overview climb and planned two-side inspection sequence before approaching insulators; the novice never reached a single insulator because the route plan rule was not applied.",
+    "Request clarification from the tutor on inspection standoff distances and approach geometry before each tower to anchor decision-making; the 12 tutor messages were not converted into questions or confirmed understanding.",
+    "Extend flight duration and plan specific hover time at each insulator target; at 67 seconds the novice did not attempt inspection, whereas the expert spent 173 seconds conducting a focused, multi-defect inspection."
+  ],
+  "instructor_verdict": "The novice is not yet ready for supervised field work. Despite superior stability and safe cable margins, the zero inspection coverage and six Guardian bailouts reveal that the novice has not internalized the expert's systematic approach rules or the discipline required to dwell at targets. Readiness requires a second training flight in which the novice executes the preflight overview, completes at least one full insulator inspection with confirmed standoff, and crosses the road per rule; only then can supervised mission work begin."
+}
