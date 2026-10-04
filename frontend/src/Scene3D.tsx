@@ -262,14 +262,6 @@ const World = memo(function World({ scene, inspected }: { scene: SceneData; insp
         <planeGeometry args={[scene.road_x[1] - scene.road_x[0], 800]} />
         <meshStandardMaterial color="#3a3a3a" />
       </mesh>
-      <Line
-        points={[[(scene.road_x[0] + scene.road_x[1]) / 2, -400, 0.06], [(scene.road_x[0] + scene.road_x[1]) / 2, 400, 0.06]]}
-        color="#e8e8e8"
-        lineWidth={2}
-        dashed
-        dashSize={3}
-        gapSize={4}
-      />
       {scene.pylons.map((p) => (
         <group key={p.x} position={[p.x, 0, 0]}>
           {beams.map((b, k) => (

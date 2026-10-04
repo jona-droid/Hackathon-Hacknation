@@ -43,7 +43,10 @@
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
 
 ## 5. Expert Competence Grid
-Knowledge: 1/29 slots filled, 0 confirmed in later flights.
+Knowledge: 2/29 slots filled, 0 confirmed in later flights.
+
+### Pre-flight checks, take-off and overview
+- **Overview climb** (heard once): When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.
 
 ### Approach to a pylon
 - **Tower check** (heard once): When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.

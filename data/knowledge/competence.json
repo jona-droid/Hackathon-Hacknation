@@ -12,5 +12,19 @@
     "rule": "When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.",
     "conditions": [],
     "reason": "a bird nest close to the electric line is a concern"
+  },
+  "preflight_takeoff.overview_climb": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "What makes this height important here, and what are you checking or avoiding from it?",
+        "a": "Um, at this height, I, I check for, um, for the cable. Looking at the cable, looking at if there are, like, no dysfunctionalities and if there's something missing or if, like, the glass is broken and things like that. Basically, just looking at the cable and then going on to the other side to see if, uh, if there's nothing wrong with it"
+      }
+    ],
+    "rule": "When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.",
+    "conditions": [],
+    "reason": "to spot visible problems on the cable and both sides before going close"
   }
 }
