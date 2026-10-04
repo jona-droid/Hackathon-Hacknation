@@ -16,6 +16,12 @@ export type SimState = {
   cable_dist: number;
   nearest_cable_point: number[];
   collided: boolean;
+  collision_with?: string | null;
+  wind_speed?: number;
+  wind_from_deg?: number;
+  compass_interference?: number;
+  position_hold?: boolean;
+  defects_spotted?: string[];
   mode: string;
   inspected_count: number;
   violations?: Array<{ text: string }>;

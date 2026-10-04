@@ -15,7 +15,7 @@ Your task is to produce a detailed comparative evaluation report in JSON format:
     "expert_inspected_count": <int>,
     "novice_inspected_count": <int>,
     "missed_targets": ["i3", ...],
-    "commentary": "<analysis of inspection coverage>"
+    "commentary": "<analysis of inspection coverage, including the defects each pilot found or missed (defects are placed at random on every flight, so compare the share found, not the exact defects)>"
   },
   "safety_compliance": {
     "min_cable_distance_expert": <float>,

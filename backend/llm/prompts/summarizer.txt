@@ -13,8 +13,10 @@ Produce a structured flight debrief summary in JSON format:
   "safety_violations_count": <int>,
   "max_speed_recorded": <float in m/s>,
   "hover_stability_score": <float 1-10>,
+  "defects_found": ["<defect (location)>", ...],
+  "defects_missed": ["<defect (location)>", ...],
   "key_maneuvers": [
     "<short description of significant actions taken during flight>"
   ],
-  "operational_summary": "<paragraph summary of the flight performance and findings>"
+  "operational_summary": "<paragraph summary of the flight performance and findings, including which defects were found or missed>"
 }

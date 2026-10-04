@@ -41,4 +41,6 @@ TUTOR_MODEL = os.getenv("TUTOR_MODEL", "claude-haiku-4-5")
 OBSERVER_INTERVAL_S = float(os.getenv("OBSERVER_INTERVAL_S", "3.0"))
 OBSERVER_WINDOW_S = float(os.getenv("OBSERVER_WINDOW_S", "5.0"))
 QUESTION_COOLDOWN_S = float(os.getenv("QUESTION_COOLDOWN_S", "15.0"))
+# The browser sends a camera frame every ~2 s; older frames are not shown to the observer.
+OBSERVER_FRAME_MAX_AGE_S = float(os.getenv("OBSERVER_FRAME_MAX_AGE_S", "5.0"))
 UNANSWERED_QUESTION_TIMEOUT_S = float(os.getenv("UNANSWERED_QUESTION_TIMEOUT_S", "30.0"))

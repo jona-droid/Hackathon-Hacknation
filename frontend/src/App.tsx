@@ -9,6 +9,8 @@ import { useSimSocket } from "./useSimSocket";
 import { primeMicrophone } from "./recordAnswer";
 import { API_URL } from "./config";
 
+const FRAME_MAX_WIDTH = 768;
+
 export function App() {
   const [mode, setMode] = useState<"expert" | "novice">("expert");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -22,12 +24,14 @@ export function App() {
   const { state, events, latestQuestion, latestAdvice, latestObservation, sendKeys, sendFrame } = useSimSocket();
   const lastFrameSendTime = useRef<number>(0);
 
-  // Load 3D scene data
-  useEffect(() => {
+  // Load 3D scene data (defects are re-drawn on every flight, so it is reloaded on Start)
+  const loadScene = () =>
     fetch(`${API_URL}/scene`)
       .then((r) => r.json())
       .then(setScene)
       .catch((error) => console.warn("Backend unavailable: scene could not be loaded.", error));
+  useEffect(() => {
+    loadScene();
   }, []);
 
   // Track events for insulator inspections and alerts
@@ -40,30 +44,40 @@ export function App() {
     if (e.type === "very_close_cable") {
       setWarning(`Proximity Alert: ${e.cable_dist ?? 1.5}m from conductor!`);
     } else if (e.type === "collision") {
-      setWarning("COLLISION! Motors stopped.");
+      setWarning(`COLLISION${e.with ? ` with ${String(e.with)}` : ""}! Motors stopped.`);
     }
   }, [events]);
 
-  // Periodic visual camera frame capture from 3D Canvas
+  // Periodic camera frame capture from the 3D canvas, for the LLM observer and tutor.
+  // state/sendFrame change at ~30 Hz, so read them through refs: depending on them would reset the timer forever.
+  const latestState = useRef(state);
+  latestState.current = state;
+  const sendFrameRef = useRef(sendFrame);
+  sendFrameRef.current = sendFrame;
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
       if (now - lastFrameSendTime.current < 2000) return;
       lastFrameSendTime.current = now;
 
-      const canvas = document.querySelector("canvas");
-      if (canvas && state) {
-        try {
-          const frame_b64 = canvas.toDataURL("image/jpeg", 0.5);
-          sendFrame(frame_b64, state.t);
-        } catch {
-          // Canvas may be tainted or rendering
-        }
+      const canvas = document.querySelector<HTMLCanvasElement>("section.left canvas");
+      const s = latestState.current;
+      if (!canvas || !s || !canvas.width) return;
+      try {
+        // Downscale before sending: smaller payload and fewer image tokens for Claude
+        const scale = Math.min(1, FRAME_MAX_WIDTH / canvas.width);
+        const small = document.createElement("canvas");
+        small.width = Math.round(canvas.width * scale);
+        small.height = Math.round(canvas.height * scale);
+        small.getContext("2d")?.drawImage(canvas, 0, 0, small.width, small.height);
+        sendFrameRef.current(small.toDataURL("image/jpeg", 0.7), s.t);
+      } catch {
+        // Canvas may be tainted or rendering
       }
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [state, sendFrame]);
+  }, []);
 
   // Session Start
   const startSession = async () => {
@@ -81,6 +95,7 @@ export function App() {
       setSessionId(body.session_id);
       setInspected(new Set());
       setWarning(null);
+      loadScene();
     } catch (err) {
       console.error("Failed to start session:", err);
     }
@@ -180,6 +195,10 @@ export function App() {
             state={state}
             warning={warning}
             insulatorCount={scene?.insulators.length ?? 6}
+            defectsFound={(state?.defects_spotted ?? []).map((id) => {
+              const d = scene?.defects?.find((x) => x.id === id);
+              return d ? `${d.label} (${d.target})` : id;
+            })}
             mode={mode}
           />
           <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} />
