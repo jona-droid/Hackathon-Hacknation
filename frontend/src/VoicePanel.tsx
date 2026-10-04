@@ -50,11 +50,11 @@ export function VoicePanel(props: {
   const [lastSavedInsight, setLastSavedInsight] = useState<{ slot?: string | null; text: string } | null>(null);
   const [currentMeta, setCurrentMeta] = useState<QuestionMeta>({});
   const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
-  const [recording, setRecording] = useState<"answer" | "note" | null>(null); // what the open mic records
+  const [recording, setRecording] = useState<"answer" | "note" | "question" | null>(null); // what the open mic records
   const listening = recording !== null;
 
   const lastQuestionRef = useRef<string>("");
-  const lastAdviceRef = useRef<string>("");
+  const lastAdviceRef = useRef<AIAdvice | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechGenRef = useRef(0); // bumped to cancel speech that is still being fetched
   const playbackEndRef = useRef<((finished: boolean) => void) | null>(null);
@@ -149,7 +149,7 @@ export function VoicePanel(props: {
   };
 
   /** Beep, open the mic and wait until silence, Stop (Enter) or Discard (Esc). Null = nothing kept. */
-  const record = async (kind: "answer" | "note"): Promise<Blob | null> => {
+  const record = async (kind: "answer" | "note" | "question"): Promise<Blob | null> => {
     let rec: AnswerRecording;
     try {
       beep();
@@ -232,6 +232,47 @@ export function VoicePanel(props: {
   const recordNoteRef = useRef(recordNote);
   recordNoteRef.current = recordNote;
 
+  /** Novice: show the pilot's question and speak the tutor's answer. */
+  const showTutorAnswer = (query: string, advice: Partial<AIAdvice>) => {
+    addRow({ role: "novice_operator", text: query, t: simTime, tag: "Question" });
+    if (advice.speech) {
+      addRow({ role: "tutor_model", text: advice.speech, t: simTime, tag: "TUTOR ANSWER" });
+      speakText(advice.speech);
+    }
+  };
+
+  /** Novice: ask the tutor out loud. Mic on until silence (Enter = send, Esc = cancel), then a spoken answer. */
+  const askTutorByVoice = async () => {
+    if (recordingRef.current || noteActiveRef.current) return;
+    stopSpeaking(); // don't record the tutor's own voice
+    const audio = await record("question");
+    if (!audio) {
+      addRow({ role: "system", text: "No question recorded." });
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch(`${API_URL}/dialogue/voice-advise`, {
+        method: "POST",
+        headers: { "Content-Type": audio.type || "audio/webm" },
+        body: audio,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
+      if (!data.transcript) {
+        addRow({ role: "system", text: "Nothing understood: ask again or type your question." });
+      } else {
+        showTutorAnswer(data.transcript, data);
+      }
+    } catch (err) {
+      addRow({ role: "system", text: `Could not ask the tutor: ${(err as Error)?.message ?? err}` });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  const askTutorByVoiceRef = useRef(askTutorByVoice);
+  askTutorByVoiceRef.current = askTutorByVoice;
+
   /** New question: show it, speak it, then listen for the answer. */
   const askAndListen = async (question: string, t?: number, meta: QuestionMeta = {}) => {
     recordingRef.current?.cancel();
@@ -246,13 +287,13 @@ export function VoicePanel(props: {
     }
   };
 
-  // R: record a note (expert mode, during a flight, mic closed, not typing)
+  // R (during a flight, not typing): record a note in expert mode, ask the tutor by voice in novice mode
   useEffect(() => {
-    if (mode !== "expert" || !sessionActive) return;
+    if (!sessionActive) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || e.repeat) return;
-      if (e.key.toLowerCase() === "r") recordNoteRef.current();
+      if (e.key.toLowerCase() === "r") (mode === "expert" ? recordNoteRef : askTutorByVoiceRef).current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -285,12 +326,16 @@ export function VoicePanel(props: {
     }
   }, [latestQuestion]);
 
-  // Tutor advice (novice mode): spoken only
+  // Tutor advice (novice mode): spoken only. Compared by message, not text: a repeated alarm has the same words.
   useEffect(() => {
-    if (latestAdvice?.speech && latestAdvice.speech !== lastAdviceRef.current) {
-      lastAdviceRef.current = latestAdvice.speech;
+    if (latestAdvice?.speech && latestAdvice !== lastAdviceRef.current) {
+      lastAdviceRef.current = latestAdvice;
       if (!sessionActive) return;
       addRow({ role: "tutor_model", text: latestAdvice.speech, t: simTime, tag: latestAdvice.category.toUpperCase() });
+      if (recordingRef.current) {
+        if (latestAdvice.urgency !== "high") return; // shown, not spoken into the open mic
+        recordingRef.current.cancel(); // safety first: drop the question being recorded
+      }
       speakText(latestAdvice.speech);
     }
   }, [latestAdvice]);
@@ -360,7 +405,6 @@ export function VoicePanel(props: {
     const query = noviceQueryInput.trim();
     if (!query) return;
     setNoviceQueryInput("");
-    addRow({ role: "novice_operator", text: query, t: simTime, tag: "Question" });
 
     try {
       const res = await fetch(`${API_URL}/dialogue/advise`, {
@@ -368,11 +412,7 @@ export function VoicePanel(props: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, query }),
       });
-      const advice: AIAdvice = await res.json();
-      if (advice.speech) {
-        addRow({ role: "tutor_model", text: advice.speech, t: simTime, tag: "TUTOR ANSWER" });
-        speakText(advice.speech);
-      }
+      showTutorAnswer(query, await res.json());
     } catch (err) {
       console.error("Failed to ask tutor:", err);
     }
@@ -383,6 +423,8 @@ export function VoicePanel(props: {
       ? "🎙 Recording your note… Enter = save · Esc = discard"
       : recording === "answer"
         ? "🎙 Listening… Enter = done · Esc = skip"
+        : recording === "question"
+          ? "🎙 Listening to your question… Enter = send · Esc = cancel"
         : isSubmitting
           ? "⏳ Processing…"
           : audioPlaying
@@ -390,7 +432,7 @@ export function VoicePanel(props: {
             : sessionActive
               ? mode === "expert"
                 ? "Ready: mic opens after each question · R = record a note"
-                : "Ready"
+                : "Ready · R = ask the tutor by voice"
               : "Start a flight to begin";
 
   return (
@@ -495,6 +537,24 @@ export function VoicePanel(props: {
               <p>Operating within safety parameters. Approach cables or pylons to receive expert guidance.</p>
             </div>
           )}
+
+          <div className="record-controls">
+            {recording === "question" ? (
+              <>
+                <span className="rec-indicator">● Listening to your question</span>
+                <button className="btn-primary" onClick={() => recordingRef.current?.finish()}>
+                  ⏹ Stop &amp; ask
+                </button>
+                <button className="btn-sm" onClick={() => recordingRef.current?.cancel()}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button className="btn-record" onClick={askTutorByVoice} disabled={listening || isSubmitting}>
+                {isSubmitting ? "⏳ Tutor is thinking…" : "🎙 Ask the tutor by voice"} <kbd>R</kbd>
+              </button>
+            )}
+          </div>
 
           <div className="query-input-group">
             <input

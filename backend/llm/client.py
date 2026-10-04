@@ -37,7 +37,6 @@ class LLMClient:
         system: str = "",
         image_b64: str | None = None,
         max_tokens: int = 1500,
-        temperature: float = 0.2,
     ) -> str:
         if not self.is_available:
             raise RuntimeError("Anthropic client is not configured (missing ANTHROPIC_API_KEY).")
@@ -66,7 +65,6 @@ class LLMClient:
                 system=system,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=temperature,
             )
         else:
             # Opus 5.5: thinking is always on (thinking tokens count toward max_tokens), sampling
@@ -122,7 +120,6 @@ class LLMClient:
             system=system,
             image_b64=image_b64,
             max_tokens=max_tokens,
-            temperature=0.1,
         )
         cleaned = raw.strip()
         if cleaned.startswith("```"):
