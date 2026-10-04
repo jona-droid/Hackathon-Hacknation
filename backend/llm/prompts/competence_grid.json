@@ -17,7 +17,7 @@
     "cable_dz_median": "typical height relative to the nearest cable (m, positive = above)",
     "insulator_dist_median": "typical distance to the insulator (m)",
     "pylon_dist_min": "closest distance to the tower (m)",
-    "tree_dist_min": "closest distance to the tree (m)"
+    "tree_dist_min": "closest distance to the nearest tree (m)"
   },
   "tasks": [
     {
@@ -120,7 +120,7 @@
       "id": "vegetation",
       "name": "Vegetation near the line",
       "short": "Vegetation",
-      "detect": "within 6 m of the tree",
+      "detect": "within 6 m of a tree",
       "measured": ["tree_dist", "height relative to the canopy"],
       "slots": [
         {"id": "tree_clearance_flight", "label": "Tree clearance", "type": "threshold", "learn": "Distance the drone keeps from trees and how the pilot passes them", "ask_example": "How much room do you give a tree when you fly past it, and why that much?", "evidence": ["tree_dist_min"]},

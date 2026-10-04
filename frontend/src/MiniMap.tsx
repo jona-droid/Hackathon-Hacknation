@@ -21,7 +21,9 @@ export function MiniMap({ scene, pos, yaw, inspected, trail }: { scene: SceneDat
       {scene.insulators.map((ins) => (
         <circle key={ins.id} cx={ins.pos[0]} cy={-ins.pos[1]} r={1.1} fill={inspected.has(ins.id) ? "#2ecc71" : "#1e90ff"} />
       ))}
-      <circle cx={scene.tree.center[0]} cy={-scene.tree.center[1]} r={3} fill="forestgreen" />
+      {scene.trees.map((t, i) => (
+        <circle key={i} cx={t.center[0]} cy={-t.center[1]} r={3} fill="forestgreen" />
+      ))}
       {/* flight path since take-off, starting point marked */}
       {trail.length > 1 && (
         <polyline

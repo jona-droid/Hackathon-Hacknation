@@ -7,7 +7,7 @@ export type SceneData = {
   pylons: Array<{ x: number; height: number }>;
   cables: number[][][];
   road_x: number[];
-  tree: { center: number[]; radius: number; height: number };
+  trees: Array<{ center: number[]; radius: number; height: number }>;
   insulators: Array<{ id: string; pos: number[] }>;
   tower?: Tower;
   canopy_radius?: number;
@@ -252,7 +252,42 @@ function PovCamera({ pose }: { pose: Pose }) {
   return null;
 }
 
-// Static scene (towers, cables, defects, tree): memoised so 30 Hz pose updates don't re-render it
+// Sun: low in the sky on the side the light comes from (SUN_LIGHT below), in view from the take-off
+// point. Unlit and unfogged: it stays bright at any distance (the camera far plane is 600 m).
+const SUN_POS: V3 = [424, -210, 155];
+const SUN_LIGHT: V3 = [87, -50, 100]; // same direction as the sun, higher: shorter shadows
+
+function Sun() {
+  return (
+    <group position={SUN_POS}>
+      <mesh>
+        <sphereGeometry args={[14, 32, 16]} />
+        <meshBasicMaterial color="#fff6d5" fog={false} toneMapped={false} />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[26, 32, 16]} />
+        <meshBasicMaterial color="#ffe9a8" transparent opacity={0.25} depthWrite={false} fog={false} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function Tree({ center, radius, height, canopy }: { center: number[]; radius: number; height: number; canopy: number }) {
+  return (
+    <>
+      <mesh position={[center[0], center[1], height / 2]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+        <cylinderGeometry args={[radius, radius, height, 16]} />
+        <meshStandardMaterial color="#5d4222" roughness={0.9} />
+      </mesh>
+      <mesh position={[center[0], center[1], height + 2]} castShadow>
+        <icosahedronGeometry args={[canopy, 2]} />
+        <meshStandardMaterial color="forestgreen" roughness={0.95} flatShading />
+      </mesh>
+    </>
+  );
+}
+
+// Static scene (towers, cables, defects, trees): memoised so 30 Hz pose updates don't re-render it
 const World = memo(function World({ scene, inspected }: { scene: SceneData; inspected: Set<string> }) {
   const tower = scene.tower ?? DEFAULT_TOWER;
   const beams = useMemo(() => towerBeams(tower), [tower]);
@@ -288,14 +323,9 @@ const World = memo(function World({ scene, inspected }: { scene: SceneData; insp
           <CableDefect key={d.id} defect={d} />
         ) : null
       )}
-      <mesh position={[scene.tree.center[0], scene.tree.center[1], scene.tree.height / 2]} rotation={[Math.PI / 2, 0, 0]} castShadow>
-        <cylinderGeometry args={[scene.tree.radius, scene.tree.radius, scene.tree.height, 16]} />
-        <meshStandardMaterial color="#5d4222" roughness={0.9} />
-      </mesh>
-      <mesh position={[scene.tree.center[0], scene.tree.center[1], scene.tree.height + 2]} castShadow>
-        <icosahedronGeometry args={[scene.canopy_radius ?? 3, 2]} />
-        <meshStandardMaterial color="forestgreen" roughness={0.95} flatShading />
-      </mesh>
+      {scene.trees.map((t, i) => (
+        <Tree key={i} {...t} canopy={scene.canopy_radius ?? 3} />
+      ))}
     </>
   );
 });
@@ -309,8 +339,9 @@ export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: nu
       <fog attach="fog" args={["#9cc7e8", 60, 320]} />
       <PovCamera pose={{ pos, yaw }} />
       <hemisphereLight args={["#dceeff", "#3b5d2e", 0.8]} />
+      <Sun />
       <directionalLight
-        position={[40, -60, 80]}
+        position={SUN_LIGHT}
         intensity={1.4}
         castShadow
         shadow-mapSize={[4096, 4096]}

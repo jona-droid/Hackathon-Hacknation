@@ -55,7 +55,7 @@ class EventDetector:
 
         hover = speed < 0.35 and pos[2] > 0.8
         over_road = self.scene.road_x[0] <= pos[0] <= self.scene.road_x[1] and pos[2] < 22.0
-        near_tree = float(np.linalg.norm(pos[:2] - np.array(self.scene.tree_center))) <= 4.5
+        near_tree = any(float(np.linalg.norm(pos[:2] - np.array([tx, ty]))) <= 4.5 for tx, ty, _, _ in self.scene.trees)
         near_cable = cable_dist < 4.0
         very_close = cable_dist < 1.8
         airborne = pos[2] > 0.4

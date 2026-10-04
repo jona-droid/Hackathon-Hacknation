@@ -17,10 +17,26 @@ class Scene:
     cable_y: list[float] = field(default_factory=lambda: [-3.0, 3.0])
     sag: float = 4.0
     road_x: tuple[float, float] = (82.0, 90.0)
-    tree_center: tuple[float, float] = (30.0, 9.0)
-    tree_radius: float = 2.0
-    tree_height: float = 11.0
+    # (x, y, trunk radius, trunk height); each canopy is a sphere 2 m above its trunk top
+    trees: list[tuple[float, float, float, float]] = field(default_factory=lambda: [
+        (30.0, 9.0, 2.0, 11.0),  # beside span 1
+        (52.0, -10.0, 1.6, 9.0),  # south of tower 2
+        (102.0, 8.0, 1.8, 13.0),  # tall, beside span 2: its canopy reaches towards the y = +3 cable
+    ])
     defects: list[dict[str, Any]] = field(default_factory=list)  # set per flight by sim/defects.py
+
+    # First tree, for older modules (guardrails.py) written when there was only one
+    @property
+    def tree_center(self) -> tuple[float, float]:
+        return self.trees[0][0], self.trees[0][1]
+
+    @property
+    def tree_radius(self) -> float:
+        return self.trees[0][2]
+
+    @property
+    def tree_height(self) -> float:
+        return self.trees[0][3]
 
     @property
     def insulators(self) -> list[dict[str, Any]]:
@@ -82,11 +98,11 @@ def collision(pos: np.ndarray, scene: Scene) -> str | None:
     if nearest_cable_point(pos, scene)[1] < CABLE_HIT_DIST:
         return "cable"
 
-    tx, ty = scene.tree_center
-    if math.hypot(x - tx, y - ty) < scene.tree_radius + r and z <= scene.tree_height:
-        return "tree"
-    if float(np.linalg.norm(pos - np.array([tx, ty, scene.tree_height + 2.0]))) < TREE_CANOPY_RADIUS + r:
-        return "tree"
+    for tx, ty, tr, th in scene.trees:
+        if math.hypot(x - tx, y - ty) < tr + r and z <= th:
+            return "tree"
+        if float(np.linalg.norm(pos - np.array([tx, ty, th + 2.0]))) < TREE_CANOPY_RADIUS + r:
+            return "tree"
 
     arm_z = scene.pylon_height + CROSSARM_ABOVE_CABLE
     for px in scene.pylon_x:
@@ -122,10 +138,13 @@ def clearances(pos: np.ndarray, scene: Scene) -> dict[str, Any]:
         for x in scene.pylon_x
     )
 
-    tx, ty = scene.tree_center
-    trunk = _segment_dist(pos, np.array([tx, ty, 0.0]), np.array([tx, ty, scene.tree_height])) - scene.tree_radius
-    canopy = float(np.linalg.norm(pos - np.array([tx, ty, scene.tree_height + 2.0]))) - TREE_CANOPY_RADIUS
-    tree_dist = max(0.0, min(trunk, canopy))
+    tree_dist = max(0.0, min(
+        min(
+            _segment_dist(pos, np.array([tx, ty, 0.0]), np.array([tx, ty, th])) - tr,  # trunk
+            float(np.linalg.norm(pos - np.array([tx, ty, th + 2.0]))) - TREE_CANOPY_RADIUS,  # canopy
+        )
+        for tx, ty, tr, th in scene.trees
+    ))
 
     ins_id, ins_dist = min(
         ((ins["id"], float(np.linalg.norm(pos - _vec(ins["pos"])))) for ins in scene.insulators),
@@ -167,11 +186,7 @@ def scene_json(scene: Scene) -> dict[str, Any]:
         "pylons": [{"x": x, "height": scene.pylon_height} for x in scene.pylon_x],
         "cables": cables,
         "road_x": list(scene.road_x),
-        "tree": {
-            "center": list(scene.tree_center),
-            "radius": scene.tree_radius,
-            "height": scene.tree_height,
-        },
+        "trees": [{"center": [tx, ty], "radius": tr, "height": th} for tx, ty, tr, th in scene.trees],
         "insulators": scene.insulators,
         "tower": {
             "base_half_width": TOWER_BASE_HALF_WIDTH,
