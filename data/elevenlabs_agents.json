@@ -28,7 +28,7 @@
   "agents": {
     "interviewer": {
       "agent_id": "agent_1301m431negte1wrcg8a1mkktmch",
-      "hash": "39de7f927018d106",
+      "hash": "294d2fcb0ce1d7e0",
       "llm": "claude-sonnet-5-5",
       "tts_model": "eleven_v3_conversational"
     },

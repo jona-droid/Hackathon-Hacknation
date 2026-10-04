@@ -43,7 +43,7 @@
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
 
 ## 5. Expert Competence Grid
-Knowledge: 3/29 slots filled, 0 confirmed in later flights.
+Knowledge: 5/29 slots filled, 0 confirmed in later flights.
 
 ### Pre-flight checks, take-off and overview
 - **Route plan** (heard once): When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.
@@ -51,3 +51,11 @@ Knowledge: 3/29 slots filled, 0 confirmed in later flights.
 
 ### Approach to a pylon
 - **Tower check** (heard once): When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.
+
+### Close inspection of an insulator string
+- **Inspection distance** (heard once): When inspecting an insulator string, a novice should always keep at least 5 m from the string and never go closer, because closer work takes experience and an untrained pilot risks hitting and breaking something.
+  - Condition: Only an experienced pilot may go closer than 5 m; an apprentice never does.
+  - Measured: insulator distance 6.9 m, height vs cable +3.0 m
+
+### Abort and emergency handling
+- **Escape manoeuvre** (heard once): When you are about to hit the pylon and impact is immediate, climb straight up rather than continuing into the structure, to avoid striking the high-voltage structure.

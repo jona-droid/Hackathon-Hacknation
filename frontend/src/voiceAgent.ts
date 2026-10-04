@@ -27,6 +27,8 @@ export class VoiceAgent {
   private starting: Promise<boolean> | null = null;
   role: AgentRole | null = null;
   speaking = false;
+  private toolsInFlight = 0;
+  private lastActivity = 0; // last thing the agent said or did
 
   constructor(private handlers: () => AgentHandlers) {}
 
@@ -59,10 +61,15 @@ export class VoiceAgent {
         AGENT_TOOLS.map((name) => [
           name,
           async (params: Record<string, unknown>) => {
+            this.toolsInFlight++;
+            this.lastActivity = Date.now();
             try {
               return (await h().tools[name]?.(params)) ?? "ok";
             } catch (err) {
               return `error: ${(err as Error)?.message ?? err}`;
+            } finally {
+              this.toolsInFlight--;
+              this.lastActivity = Date.now();
             }
           },
         ])
@@ -72,15 +79,21 @@ export class VoiceAgent {
         connectionType: "websocket",
         dynamicVariables: dynamic_variables,
         clientTools,
-        onMessage: ({ message, role: who }) => (who === "agent" ? h().onAgentText(message) : h().onUserText(message)),
+        onMessage: ({ message, role: who }) => {
+          if (who === "agent") this.lastActivity = Date.now();
+          return who === "agent" ? h().onAgentText(message) : h().onUserText(message);
+        },
         onModeChange: ({ mode }) => {
           this.speaking = mode === "speaking";
+          this.lastActivity = Date.now();
           h().onMode(this.speaking);
         },
         onDisconnect: () => {
           this.conv = null;
           this.role = null;
           this.speaking = false;
+          this.toolsInFlight = 0;
+          h().onMode(false);
           h().onStatus("disconnected");
         },
         onError: (message: string) => console.warn("ElevenLabs agent:", message),
@@ -102,7 +115,22 @@ export class VoiceAgent {
     this.conv = null;
     this.role = null;
     this.speaking = false;
-    if (c) await c.endSession().catch(() => {});
+    this.toolsInFlight = 0;
+    if (c) {
+      this.handlers().onMode(false);
+      await c.endSession().catch(() => {});
+    }
+  }
+
+  /** Resolves once the agent is done with its turn: no tool call open, not speaking, and quiet for
+   * quietMs (its reply to a tool result comes a moment after the result). The next cue waits for it:
+   * a cue sent while a tool call is open makes the agent repeat the call on the next question. */
+  async idle(quietMs = 1500, maxMs = 15000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < maxMs && this.connected) {
+      if (this.toolsInFlight === 0 && !this.speaking && Date.now() - this.lastActivity >= quietMs) return;
+      await new Promise((r) => setTimeout(r, 150));
+    }
   }
 
   /** A cue from the flight software: "[TAG] {json}". The agent follows it (see its prompt). */

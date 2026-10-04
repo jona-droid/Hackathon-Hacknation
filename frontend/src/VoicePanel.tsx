@@ -45,6 +45,7 @@ type AgentAsk = {
   predictId?: string;
   tag?: string;
   ref?: string;
+  cueWaiting?: boolean; // the cue waits for the agent to finish its previous turn
   question: string; // the agent's first words after the cue
   said: string[]; // everything the agent said since (its question and its own follow-ups)
   userText: string[]; // what the pilot said since, verbatim
@@ -435,6 +436,7 @@ export function VoicePanel(props: {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const p: AgentAsk = {
         ...meta,
+        cueWaiting: !!cue,
         question: "",
         said: [],
         userText: [],
@@ -450,7 +452,14 @@ export function VoicePanel(props: {
       pendingRef.current = p;
       setAgentWaiting(meta.kind);
       timer = setTimeout(() => p.resolve({ skipped: true, timeout: true }), timeoutMs);
-      if (cue) agent.cue(cue[0], cue[1]);
+      if (!cue) return;
+      // never while the agent is still on its previous turn (a tool call open, its thanks being spoken)
+      void agent.idle().then(() => {
+        if (pendingRef.current !== p) return;
+        if (!agent.connected) return p.resolve({ skipped: true });
+        p.cueWaiting = false;
+        agent.cue(cue[0], cue[1]);
+      });
     });
 
   /** Something typed instead of said: shown, kept as the verbatim answer, and sent to the agent. */
@@ -493,6 +502,10 @@ export function VoicePanel(props: {
       const text = stripTags(raw);
       if (!text) return;
       const p = pendingRef.current;
+      if (p?.cueWaiting) {
+        addRow({ role: mode === "expert" ? "ai" : "tutor", text }); // the end of the previous turn
+        return;
+      }
       const first = !!p && !p.question;
       p?.said.push(text);
       if (p && first) {
@@ -510,7 +523,7 @@ export function VoicePanel(props: {
         typedEchoRef.current = ""; // already shown when typed
         return;
       }
-      const p = pendingRef.current;
+      const p = pendingRef.current?.cueWaiting ? null : pendingRef.current;
       p?.userText.push(text);
       const tag = !p ? undefined : { predict: "Your answer", teachback: "Teach-back reply", note: "Note", live: "Answer", debrief: "Answer" }[p.kind];
       addRow({ role: "pilot", text, tag });
@@ -520,7 +533,7 @@ export function VoicePanel(props: {
     tools: {
       save_answer: async (params) => {
         const p = pendingRef.current;
-        if (!p || (p.kind !== "live" && p.kind !== "debrief")) return "No question is open: say nothing.";
+        if (!p || p.cueWaiting || (p.kind !== "live" && p.kind !== "debrief")) return "Already saved: say nothing.";
         // only what the pilot really said (or typed) is saved, never the agent's own words
         const said = p.userText.join(" ").trim();
         if (!said) return p.question ? "The pilot has not answered yet: wait for their answer." : "You have not asked yet: ask your question now.";
@@ -535,7 +548,7 @@ export function VoicePanel(props: {
             if (data.off_record) return "Off the record: say nothing.";
             return data.insight ? "Saved. Say a two- or three-word thanks, nothing else." : "Noted. Say okay and nothing else.";
           }
-          const data = await post(`/debrief/${debriefSidRef.current}/answer`, { item_id: p.itemId, answer: said, asked, slot });
+          const data = await post(`/debrief/${debriefSidRef.current}/answer`, { item_id: p.itemId, answer: said, asked });
           showLearned(data.result ?? {});
           p.resolve({ answer: said, data });
           return "Saved. Say a two- or three-word thanks, nothing else.";
@@ -548,6 +561,7 @@ export function VoicePanel(props: {
         }
       },
       skip_question: async () => {
+        if (pendingRef.current?.cueWaiting) return "Already done: say nothing.";
         pendingRef.current?.resolve({ skipped: true });
         return "Skipped. Say nothing more.";
       },
@@ -576,7 +590,7 @@ export function VoicePanel(props: {
       teachback_verdict: async (params) => {
         const p = pendingRef.current;
         const sid = debriefSidRef.current;
-        if (!p || p.kind !== "teachback" || !sid) return "No teach-back is open: say nothing.";
+        if (!p || p.cueWaiting || p.kind !== "teachback" || !sid) return "No teach-back is open: say nothing.";
         const corrections = Array.isArray(params.corrections) ? params.corrections.map(String) : [];
         setIsSubmitting(true);
         try {
@@ -598,7 +612,7 @@ export function VoicePanel(props: {
       },
       log_prediction: async (params) => {
         const p = pendingRef.current;
-        if (!p || p.kind !== "predict") return "No question is open: say nothing.";
+        if (!p || p.cueWaiting || p.kind !== "predict") return "No question is open: say nothing.";
         const answer = p.userText.join(" ").trim() || String(params.novice_answer ?? "");
         const verdict = String(params.verdict ?? "wrong");
         nextTagRef.current = VERDICT_LABEL[verdict] ?? "Feedback";
@@ -616,7 +630,11 @@ export function VoicePanel(props: {
 
   /** Expert flight: the attention model chose the moment and the slot; the agent words the question. */
   const agentLiveQuestion = async (q: AIQuestion) => {
-    if (pendingRef.current || !q.cue) return;
+    if (!q.cue) return;
+    if (pendingRef.current) {
+      await post("/dialogue/skip?declined=true").catch(() => {});
+      return;
+    }
     await waitForSilence();
     if (!liveRef.current.sessionActive || offRecordRef.current || pendingRef.current) {
       await post("/dialogue/skip").catch(() => {});
@@ -626,10 +644,13 @@ export function VoicePanel(props: {
     const asking = agentAsk({ kind: "live", cueId: q.cue_id, tag: "Question" }, ["ASK", q.cue], 90000);
     // the agent may judge the moment not worth a question (skip_turn is invisible here): silence = declined
     const p = pendingRef.current as AgentAsk | null; // the question just opened
-    setTimeout(() => {
+    const declineIfSilent = () => {
       const open = pendingRef.current as AgentAsk | null;
-      if (open && open === p && !open.question) open.resolve({ skipped: true, declined: true });
-    }, 12000);
+      if (!open || open !== p || open.question) return;
+      if (open.cueWaiting) setTimeout(declineIfSilent, 1000);
+      else open.resolve({ skipped: true, declined: true });
+    };
+    setTimeout(declineIfSilent, 14000);
     const r = await asking;
     if (r.skipped) {
       await post(`/dialogue/skip${r.declined ? "?declined=true" : ""}`).catch(() => {});
@@ -1138,6 +1159,10 @@ export function VoicePanel(props: {
         if (state.phase === "questions") {
           const item = state.items.find((i) => i.status === "pending");
           if (!item) break;
+          if (!agent.connected) {
+            addRow({ role: "system", text: "The voice agent disconnected: debrief paused. Press Debrief to resume." });
+            return true;
+          }
           const pos = state.items.findIndex((i) => i.id === item.id) + 1;
           const cue = {
             intro,

@@ -40,5 +40,59 @@
     "rule": "When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.",
     "conditions": [],
     "reason": ""
+  },
+  "emergency.escape_manoeuvre": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "That was close to the tower. When you recovered just now, what was your first move to get clear, and why that one?",
+        "a": "Uh, I would climb if, uh, hitting the, the pilon is, uh, uh, is an immediate effect. So basically, uh, if you're about to hit it, just go up instead of hitting the, the high voltage, uh, h- high, high power structure. Put this in position. Il marche pas super bien, par contre. On n'a pas adapté le format JSONau format... JSON n'est pas adapté. Il est con, ce putain. Il va avoir des conversations. Oh, la dég, trop con. Mais lui aussi, là, ça marche pas. Moi, je m'en sors pas. Les gars, il est bientôt midi. De toute façon, c'est l'heure du déjeuner. C'est pause déjeuner. Bon, t'as vu, là, il est resté bloqué.",
+        "t": 8.4,
+        "session": "expert-d7be4a8e",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When you are about to hit the pylon and impact is immediate, climb straight up rather than continuing into the structure, to avoid striking the high-voltage structure.",
+    "conditions": [],
+    "reason": "to avoid hitting the high-voltage structure",
+    "learned_in": {
+      "session": "expert-d7be4a8e",
+      "t": 8.4
+    }
+  },
+  "insulator_inspection.inspection_standoff": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "insulator_dist_median": 6.9,
+      "cable_dz_median": 3.0
+    },
+    "answers": [
+      {
+        "q": "Flight's over, so one more question. When you inspect a string, what distance do you hold, and what stops you going closer? Why five metres, and would you ever let the apprentice go closer than that?",
+        "a": "Uh, what stops me getting closer, um, is my knowledge because I am so over-skilled, and, uh, the apprentice doesn't know how to do it, so the apprentice should always keep a distance of five meters. Um, no, 'cause then he was breaking something.",
+        "t": 25.6,
+        "session": "expert-d7be4a8e",
+        "phase": "debrief"
+      },
+      {
+        "q": "Flight's over, so one more question. When you inspect a string, what distance do you hold, and what stops you going closer? Why five metres, and would you ever let the apprentice go closer than that?",
+        "a": "Uh, what stops me getting closer, um, is my knowledge because I am so over-skilled, and, uh, the apprentice doesn't know how to do it, so the apprentice should always keep a distance of five meters. Um, no, 'cause then he was breaking something. I think that's okay.",
+        "t": 25.6,
+        "session": "expert-d7be4a8e",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When inspecting an insulator string, a novice should always keep at least 5 m from the string and never go closer, because closer work takes experience and an untrained pilot risks hitting and breaking something.",
+    "conditions": [
+      "Only an experienced pilot may go closer than 5 m; an apprentice never does."
+    ],
+    "reason": "closer flying needs skill; a novice risks breaking something",
+    "learned_in": {
+      "session": "expert-d7be4a8e",
+      "t": 25.6
+    }
   }
 }

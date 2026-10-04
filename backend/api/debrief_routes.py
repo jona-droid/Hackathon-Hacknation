@@ -26,7 +26,6 @@ class DebriefAnswer(BaseModel):
     item_id: int
     answer: str
     asked: str | None = None  # ElevenAgents: the agent's own wording of the question (and its follow-ups)
-    slot: str | None = None  # ElevenAgents: the gap the agent ended up asking about
 
 
 class TeachBackVerdict(BaseModel):
@@ -78,10 +77,10 @@ async def debrief_get(session_id: str) -> dict[str, Any]:
     return state
 
 
-async def _answer(session_id: str, item_id: int, text: str, asked: str | None = None, slot: str | None = None) -> dict[str, Any]:
+async def _answer(session_id: str, item_id: int, text: str, asked: str | None = None) -> dict[str, Any]:
     async with _lock(session_id):
         try:
-            return await asyncio.to_thread(runtime.debrief.answer, session_id, item_id, redact(text), asked, slot)
+            return await asyncio.to_thread(runtime.debrief.answer, session_id, item_id, redact(text), asked)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
@@ -90,7 +89,7 @@ async def _answer(session_id: str, item_id: int, text: str, asked: str | None = 
 async def debrief_answer(session_id: str, payload: DebriefAnswer) -> dict[str, Any]:
     if not payload.answer.strip():
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
-    return await _answer(session_id, payload.item_id, payload.answer, payload.asked, payload.slot)
+    return await _answer(session_id, payload.item_id, payload.answer, payload.asked)
 
 
 @router.post("/debrief/{session_id}/voice-answer")

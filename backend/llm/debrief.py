@@ -289,7 +289,7 @@ class DebriefAgent:
 
     # ---- 3. answers -------------------------------------------------------------------
 
-    def answer(self, session_id: str, item_id: int, text: str, asked: str | None = None, slot: str | None = None) -> dict[str, Any]:
+    def answer(self, session_id: str, item_id: int, text: str, asked: str | None = None) -> dict[str, Any]:
         state = debrief_store.load(session_id)
         if not state:
             raise KeyError("no debrief for this session")
@@ -298,8 +298,6 @@ class DebriefAgent:
             raise KeyError("unknown question")
         if asked:
             item["question"] = asked  # the voice agent's own words (it asked its own follow-ups)
-        if slot and slot in competence_store.SLOTS and slot != item["slot"]:
-            item.update({"slot": slot, "slot_name": competence_store.slot_name(slot), "hypothesis": None, "deviation": None})
         flight = load_flight(session_id)
         eps = [ep for ep in flight.episodes_of(item["task"])] if flight else []
         ep = max(eps, key=lambda e: e.duration) if eps else None
