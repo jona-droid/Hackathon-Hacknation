@@ -43,11 +43,38 @@
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
 
 ## 5. Expert Competence Grid
-Knowledge: 3/29 slots filled, 0 confirmed in later flights.
+Knowledge: 11/29 slots filled, 0 confirmed in later flights.
 
 ### Pre-flight checks, take-off and overview
 - **Route plan** (heard once): When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.
 - **Overview climb** (heard once): When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.
 
+### Transit along the line between structures
+- **Transit position** (heard once): When moving along the line, fly either above or beside the cables (it does not matter which) as long as you keep an offset of at least about 2 m from the cables, so the drone is not disturbed by them.
+  - Measured: height vs cable +0.3 m, cable distance 8.0 m
+
 ### Approach to a pylon
 - **Tower check** (heard once): When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.
+- **Tower clearance** (heard once): When approaching the tower body or crossarm, never go closer than about 1.5 m, because near the insulator parts it is very dangerous for the drone and you can lose the connection.
+  - Measured: closest to tower 6.7 m
+
+### Close inspection of an insulator string
+- **Inspection distance** (heard once): When inspecting an insulator string, do not push closer than you can comfortably hold, because the nearby cable limits how close you can go and the drone could touch it.
+  - Condition: In wind, keep more distance from the string, because a gust can push the drone into the cables.
+  - Measured: insulator distance 4.6 m, height vs cable +2.6 m
+
+### Inspection of the conductors along a span
+- **Cable damage cues** (heard once): When scanning a cable, look for places where the cable is not as uniform as it should be; an irregularity in its shape can indicate a foreign object such as a kite or other damage.
+
+### Confirming, rating and reporting a defect
+- **Confirming a defect** (heard once): When you suspect a defect, look at it from all the different angles and analyse the situation before concluding it is a defect that needs repair.
+- **Severity** (heard once): When you find flashover soot burn marks on an insulator, classify it as monitor only by default; if the insulator's colour is too different from the normal classic blue, plan a repair instead of just monitoring.
+  - Condition: If the soot makes the insulator colour differ strongly from its normal classic blue, plan a repair rather than monitoring.
+
+### Crossing a road
+- **Crossing rule** (heard once): When crossing a road, you do not need to stay high: fly at least 5 m above the road. There is no set crossing speed.
+  - Measured: height 27.8 m, speed 10.3 m/s
+
+### Vegetation near the line
+- **Tree clearance** (heard once): When flying past a tree, pass above it and keep about 2 m of clearance from it in every direction, because the pilot considers 2 m enough.
+  - Measured: closest to tree 5.1 m

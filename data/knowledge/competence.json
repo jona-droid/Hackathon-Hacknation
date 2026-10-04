@@ -11,7 +11,11 @@
     ],
     "rule": "When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.",
     "conditions": [],
-    "reason": "a bird nest close to the electric line is a concern"
+    "reason": "a bird nest close to the electric line is a concern",
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
   },
   "preflight_takeoff.overview_climb": {
     "confidence": "once",
@@ -25,7 +29,11 @@
     ],
     "rule": "When you climb to overview height before going close, look along the cable for anything abnormal, missing parts or broken glass, then move to the other side and check that nothing is wrong there either.",
     "conditions": [],
-    "reason": "to spot visible problems on the cable and both sides before going close"
+    "reason": "to spot visible problems on the cable and both sides before going close",
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
   },
   "preflight_takeoff.route_plan": {
     "confidence": "once",
@@ -39,6 +47,269 @@
     ],
     "rule": "When planning the inspection, always check both sides of the line: start on one side, then fly over the high-voltage lines to inspect the other side.",
     "conditions": [],
-    "reason": ""
+    "reason": "",
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "defect_assessment.severity": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "You found soot burn marks on this insulator: is that fix now, plan a repair, or just monitor?",
+        "a": "Just for monitoring",
+        "t": 20.0,
+        "session": "expert-ccedc52f",
+        "phase": "live"
+      },
+      {
+        "q": "What would make soot marks on an insulator serious enough to plan a repair instead of just monitoring?",
+        "a": "If the colors of the insulators are too different from the, the blue classical",
+        "t": 35.9,
+        "session": "expert-ccedc52f",
+        "phase": "live"
+      }
+    ],
+    "rule": "When you find flashover soot burn marks on an insulator, classify it as monitor only by default; if the insulator's colour is too different from the normal classic blue, plan a repair instead of just monitoring.",
+    "conditions": [
+      "If the soot makes the insulator colour differ strongly from its normal classic blue, plan a repair rather than monitoring."
+    ],
+    "reason": "",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 20.0
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "vegetation.tree_clearance_flight": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "tree_dist_min": 5.1
+    },
+    "answers": [
+      {
+        "q": "How much room do you give a tree when you fly past it, and why that much?",
+        "a": "I just leave about, uh, two meters in every direction",
+        "t": 102.6,
+        "session": "expert-ccedc52f",
+        "phase": "live"
+      },
+      {
+        "q": "Why two meters from a tree, and how do you actually pass it, beside or above?",
+        "a": "I pass it above and two meters because it's enough, uh, yeah",
+        "t": 118.7,
+        "session": "expert-ccedc52f",
+        "phase": "live"
+      }
+    ],
+    "rule": "When flying past a tree, pass above it and keep about 2 m of clearance from it in every direction, because the pilot considers 2 m enough.",
+    "conditions": [],
+    "reason": "2 m is enough",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 118.7
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "insulator_inspection.inspection_standoff": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "insulator_dist_median": 4.6,
+      "cable_dz_median": 2.6
+    },
+    "answers": [
+      {
+        "q": "You held about 4.6 metres from that string for nearly 50 seconds: what stops you going closer than that?",
+        "a": "Because it was, uh, too hard to get, uh, to get closer",
+        "t": 160.8,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      },
+      {
+        "q": "What exactly made getting closer hard: the cable nearby, interference, wind, or something else?",
+        "a": "The cable nearby, and if, uh, we have, uh, some wind, it can be very dangerous because we are-- we can touch the cables. It can",
+        "t": 160.8,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When inspecting an insulator string, do not push closer than you can comfortably hold, because the nearby cable limits how close you can go and the drone could touch it.",
+    "conditions": [
+      "In wind, keep more distance from the string, because a gust can push the drone into the cables."
+    ],
+    "reason": "nearby cable could be touched, especially in wind",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 160.8
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "conductor_inspection.conductor_cues": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "When you spotted that kite near the cable, what did you do to confirm it was really a defect before reporting it?",
+        "a": "So that the cable is not, uh, as uniform as it should be",
+        "t": 82.3,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When scanning a cable, look for places where the cable is not as uniform as it should be; an irregularity in its shape can indicate a foreign object such as a kite or other damage.",
+    "conditions": [],
+    "reason": "",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 82.3
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "defect_assessment.confirmation": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "Before reporting it, what did you do to make sure it was really a defect, like changing angle or distance?",
+        "a": "Like we went on all the different angles, analyzed the situation, and made the final output that this was a defect and that we should look for it and make a reparation",
+        "t": 82.3,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When you suspect a defect, look at it from all the different angles and analyse the situation before concluding it is a defect that needs repair.",
+    "conditions": [],
+    "reason": "to be sure it is really a defect before calling for repair",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 82.3
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "road_crossing.crossing_rule": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "altitude_median": 27.8,
+      "speed_median": 10.3
+    },
+    "answers": [
+      {
+        "q": "At the road crossing, you climbed to about 28 metres and flew at about 10 metres per second: is that your rule, and what decides it?",
+        "a": "Our rule that, uh, we can go, uh, lower. It's not a big deal if we go just, uh, five meters above the road",
+        "t": 160.9,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      },
+      {
+        "q": "When you cross lower, how do you cross the road itself, and what speed do you keep?",
+        "a": "No real, um, given speed to cross the road, just be at five meters at least",
+        "t": 160.9,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When crossing a road, you do not need to stay high: fly at least 5 m above the road. There is no set crossing speed.",
+    "conditions": [],
+    "reason": "",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 160.9
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "structure_approach.structure_clearance": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "pylon_dist_min": 6.7
+    },
+    "answers": [
+      {
+        "q": "What is the closest you will go to the tower body, and what decides that minimum distance?",
+        "a": "About a meter and a half, uh, because if we go... Yeah",
+        "t": 55.2,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      },
+      {
+        "q": "What decides that one and a half metre limit, and when would you keep further away?",
+        "a": "It is a safe limit because if we are too-- if we're near the insulator parts, it can be very dangerous for the drone, and we can lose the connection",
+        "t": 55.2,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When approaching the tower body or crossarm, never go closer than about 1.5 m, because near the insulator parts it is very dangerous for the drone and you can lose the connection.",
+    "conditions": [],
+    "reason": "Near the insulator parts the drone is at risk and the connection can be lost.",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 55.2
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
+  },
+  "corridor_transit.transit_position": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {
+      "cable_dz_median": 0.3,
+      "cable_dist_median": 8.0
+    },
+    "answers": [
+      {
+        "q": "When you move along the line, where do you fly relative to the cables, and what offset do you keep?",
+        "a": "We usually keep an offset of about two meters so that we don't have dis- disturbances due to the cables",
+        "t": 61.0,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      },
+      {
+        "q": "Do you fly above the cables or beside them when moving along the line?",
+        "a": "Fly above the cables or beside, uh, it doesn't really matter as, uh, as long as we are two meters away from the cables",
+        "t": 61.0,
+        "session": "expert-ccedc52f",
+        "phase": "debrief"
+      }
+    ],
+    "rule": "When moving along the line, fly either above or beside the cables (it does not matter which) as long as you keep an offset of at least about 2 m from the cables, so the drone is not disturbed by them.",
+    "conditions": [],
+    "reason": "avoid disturbances caused by the cables",
+    "learned_in": {
+      "session": "expert-ccedc52f",
+      "t": 61.0
+    },
+    "teachback": {
+      "session": "expert-ccedc52f",
+      "confirmed": true
+    }
   }
 }
