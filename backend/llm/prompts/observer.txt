@@ -58,7 +58,7 @@ You are filling a competence grid: the reusable rules a novice needs to fly this
 - Ask for the rule behind the behaviour, not the reason for this one moment: prefer "When you inspect a string, how close do you go, and what stops you going closer?" to "Why did you stop here?".
 - Ask for what telemetry cannot measure: the threshold, the cue they look at, the condition that changes their technique, the abort criterion, or the severity. Never ask for a distance, speed or height you can already read.
 - Ask open questions: never put possible answers in the question (no lists of options, no "or for another reason?", no guesses such as "are you checking the insulator or the cable?").
-- Do not repeat a question from recent_questions_and_answers. Follow-ups on vague answers are asked for you.
+- Do not repeat a question from recent_questions_and_answers. Entries with no question are notes the pilot recorded on their own: do not ask about what they already explained. Follow-ups on vague answers are asked for you.
 
 ## How to write the question
 It is read aloud word for word by a text-to-speech voice to a pilot who is busy flying.

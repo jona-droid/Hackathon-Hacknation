@@ -28,6 +28,7 @@ from backend.storage import competence_store
 logger = logging.getLogger("robot-apprentice.observer")
 
 FOLLOW_UP_MAX_AGE_S = 60.0
+PILOT_NOTE_MAX_S = 90.0  # a note recording the browser never closed stops blocking questions after this
 DEVIATION_MAX_AGE_S = 40.0
 MAX_OPEN_SLOTS = 8
 
@@ -35,6 +36,11 @@ MAX_OPEN_SLOTS = 8
 def _awaiting_answer(t: float) -> bool:
     last = runtime.qa_history[-1] if runtime.qa_history else None
     return bool(last and last["answer"] is None and t - last["t"] < UNANSWERED_QUESTION_TIMEOUT_S)
+
+
+def _pilot_recording(t: float) -> bool:
+    since = runtime.pilot_note_since
+    return since is not None and t - since < PILOT_NOTE_MAX_S
 
 
 def _can_ask(t: float) -> bool:
@@ -46,6 +52,7 @@ def _can_ask(t: float) -> bool:
         and runtime.flight_log.duration >= OBSERVER_WINDOW_S
         and t - runtime.last_question_time >= QUESTION_COOLDOWN_S
         and not _awaiting_answer(t)
+        and not _pilot_recording(t)
     )
 
 
@@ -204,6 +211,9 @@ async def observe_once(force: bool = False, learning: dict[str, Any] | None = No
         return None
 
     t = runtime.drone.elapsed_time
+    if _pilot_recording(t) and not force:
+        logger.info("observer: the pilot started a note during the call, question dropped")
+        return None
     if runtime.recorder:
         runtime.recorder.record_observation({"t": t, "forced": force, **decision.model_dump()})
     await broadcast({"type": "observation", "t": t, "observation": decision.observation, "asked": decision.ask_question})

@@ -28,7 +28,7 @@ router = APIRouter(tags=["Dialogue & Voice"])
 
 class AnswerRequest(BaseModel):
     session_id: str | None = None
-    question: str
+    question: str = ""  # empty: a note the pilot volunteered
     answer: str
     context: dict[str, Any] | None = None
 
@@ -83,10 +83,12 @@ def _measured(qa: dict[str, Any]) -> tuple[str | None, dict[str, float]]:
 
 
 async def _process_answer(question: str, answer: str) -> dict[str, Any]:
+    """An answer to the apprentice's question, or (empty question) a note the pilot volunteered."""
     t = runtime.drone.elapsed_time
-    qa = _close_pending_question(answer)
+    note = not question.strip()
+    qa = None if note else _close_pending_question(answer)
     if not qa or qa["question"] != question:
-        qa = {}  # typed note without a question: let the knowledge manager pick the slot
+        qa = {}  # no matching question: the knowledge manager picks the slot
     measured_task, measured = _measured(qa)
 
     result = await asyncio.to_thread(
@@ -101,7 +103,10 @@ async def _process_answer(question: str, answer: str) -> dict[str, Any]:
         t=t,
     )
 
-    # One follow-up per question, asked by the observer loop at the next calm moment
+    if note:  # the observer sees it, so it won't ask about what the pilot just explained
+        runtime.qa_history.append({"t": t, "question": None, "answer": answer, "slot": result.get("slot"), "kind": "note"})
+
+    # One follow-up per question or note, asked by the observer loop at the next calm moment
     if result.get("follow_up") and qa.get("kind") != "follow_up" and runtime.session_active:
         runtime.pending_follow_up = {"t": runtime.drone.elapsed_time, "question": result["follow_up"],
                                      "slot": result.get("slot") or qa.get("slot")}
@@ -111,6 +116,7 @@ async def _process_answer(question: str, answer: str) -> dict[str, Any]:
     if runtime.recorder:
         runtime.recorder.record_transcript({
             "role": "expert_operator",
+            "kind": "note" if note else "answer",
             "text": answer,
             "t": t,
             "slot": result.get("slot"),
@@ -138,9 +144,23 @@ def _transcribe(audio: bytes, content_type: str) -> str:
     return resp.json().get("text", "").strip()
 
 
+@router.post("/dialogue/pilot-note")
+async def pilot_note(active: bool) -> dict[str, Any]:
+    """The pilot pressed Record a note (or abandoned it): the apprentice stops asking meanwhile."""
+    if active:
+        _close_pending_question("(no answer)")  # a question still open is dropped for the note
+        runtime.pilot_note_since = runtime.drone.elapsed_time
+    else:
+        runtime.pilot_note_since = None
+    return {"ok": True}
+
+
 @router.post("/dialogue/voice-answer")
-async def receive_voice_answer(request: Request, question: str) -> dict[str, Any]:
-    """Body = the recorded answer audio. Transcribed by ElevenLabs, then processed like a typed answer."""
+async def receive_voice_answer(request: Request, question: str = "") -> dict[str, Any]:
+    """Body = the recorded audio: an answer to `question`, or the pilot's own note if it is empty.
+    Transcribed by ElevenLabs, then processed like a typed answer."""
+    if not question:
+        runtime.pilot_note_since = None  # the note is recorded: the apprentice may ask again
     if not ELEVENLABS_API_KEY:
         raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured on the server.")
     audio = await request.body()
@@ -155,7 +175,8 @@ async def receive_voice_answer(request: Request, question: str) -> dict[str, Any
         logger.error(f"Cannot reach ElevenLabs: {e}")
         raise HTTPException(status_code=502, detail=f"Cannot reach ElevenLabs (network or certificate problem): {e}")
     if not transcript:
-        _close_pending_question("(no answer)")
+        if question:
+            _close_pending_question("(no answer)")
         return {"ok": False, "transcript": "", "insight": None}
     return {"transcript": transcript, **await _process_answer(question, transcript)}
 

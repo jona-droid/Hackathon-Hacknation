@@ -59,7 +59,7 @@ class KnowledgeManager:
                 },
             }
         prompt = json.dumps({
-            "question": question,
+            "question": question or "(none: the pilot volunteered this remark while flying)",
             "answer": answer,
             "target_slot": target,
             "about_deviation": deviation and {k: deviation[k] for k in ("expected", "now") if k in deviation},
@@ -93,7 +93,7 @@ class KnowledgeManager:
             conditions=[c.strip() for c in update.conditions if c.strip()],
             reason=update.reason.strip(),
             evidence=evidence,
-            question=question,
+            question=question or "(pilot's own note)",
             answer=answer,
             session=session,
             t=t,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AIAdvice, AIObservation, AIQuestion } from "./useSimSocket";
 import { API_URL } from "./config";
-import { AnswerRecording, beep, recordAnswer } from "./recordAnswer";
+import { AnswerRecording, NOTE_LIMITS, beep, recordAnswer } from "./recordAnswer";
 
 type TranscriptRow = { role: string; text: string; t?: number; tag?: string };
 type QuestionMeta = { slotName?: string | null; kind?: AIQuestion["kind"] };
@@ -17,6 +17,7 @@ const KIND_TAG: Record<string, string> = { deviation: "Rule check", follow_up: "
 
 // Voice loop (expert mode): Claude's question is spoken with ElevenLabs text-to-speech, then the mic
 // opens for one answer only, closes on silence, and the audio is transcribed by ElevenLabs on the backend.
+// The pilot can also record a note on their own (button or R): the apprentice holds its questions meanwhile.
 export function VoicePanel(props: {
   mode: "expert" | "novice";
   sessionId: string | null;
@@ -49,7 +50,8 @@ export function VoicePanel(props: {
   const [lastSavedInsight, setLastSavedInsight] = useState<{ slot?: string | null; text: string } | null>(null);
   const [currentMeta, setCurrentMeta] = useState<QuestionMeta>({});
   const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
-  const [listening, setListening] = useState<boolean>(false);
+  const [recording, setRecording] = useState<"answer" | "note" | null>(null); // what the open mic records
+  const listening = recording !== null;
 
   const lastQuestionRef = useRef<string>("");
   const lastAdviceRef = useRef<string>("");
@@ -57,6 +59,7 @@ export function VoicePanel(props: {
   const speechGenRef = useRef(0); // bumped to cancel speech that is still being fetched
   const playbackEndRef = useRef<((finished: boolean) => void) | null>(null);
   const recordingRef = useRef<AnswerRecording | null>(null);
+  const noteActiveRef = useRef(false); // from Record a note until the note is sent or discarded
   const wasActiveRef = useRef(sessionActive);
   // read by the async voice loop, which outlives the render it started in
   const liveRef = useRef({ sessionActive, currentQuestion });
@@ -120,7 +123,7 @@ export function VoicePanel(props: {
 
   // ---- answers ----
   const showAnswerResult = (question: string, answer: string, data: AnswerResult) => {
-    addRow({ role: "expert_operator", text: answer, t: simTime, tag: "Answer" });
+    addRow({ role: "expert_operator", text: answer, t: simTime, tag: question ? "Answer" : "Note" });
     if (data.error) {
       addRow({ role: "system", text: `Not saved: the knowledge model failed (${data.error}).` });
     } else if (data.rejected) {
@@ -145,30 +148,27 @@ export function VoicePanel(props: {
     addRow({ role: "system", text: reason });
   };
 
-  /** Mic on for one answer, then off. Enter = done, Esc = skip, silence = done. */
-  const listenForAnswer = async (question: string) => {
-    let recording: AnswerRecording;
+  /** Beep, open the mic and wait until silence, Stop (Enter) or Discard (Esc). Null = nothing kept. */
+  const record = async (kind: "answer" | "note"): Promise<Blob | null> => {
+    let rec: AnswerRecording;
     try {
       beep();
       await new Promise((r) => setTimeout(r, 250)); // don't record the beep
-      recording = await recordAnswer();
+      rec = await recordAnswer(kind === "note" ? NOTE_LIMITS : undefined);
     } catch (err) {
-      addRow({ role: "system", text: `Microphone unavailable (${(err as Error)?.message ?? err}). Type your answer.` });
-      return;
+      addRow({ role: "system", text: `Microphone unavailable (${(err as Error)?.message ?? err}). Type it instead.` });
+      return null;
     }
-    recordingRef.current = recording;
-    setListening(true);
-    const audio = await recording.done;
-    setListening(false);
-    if (recordingRef.current === recording) recordingRef.current = null;
+    recordingRef.current = rec;
+    setRecording(kind);
+    const audio = await rec.done;
+    setRecording(null);
+    if (recordingRef.current === rec) recordingRef.current = null;
+    return audio;
+  };
 
-    // flight ended, a new question arrived, or the answer was typed meanwhile
-    if (!liveRef.current.sessionActive || liveRef.current.currentQuestion !== question) return;
-    if (!audio) {
-      await skipQuestion(question, "No answer recorded: question skipped.");
-      return;
-    }
-
+  /** Transcribe and learn from a recording; an empty question means the pilot's own note. */
+  const sendVoice = async (audio: Blob, question: string) => {
     setIsSubmitting(true);
     try {
       const res = await fetch(`${API_URL}/dialogue/voice-answer?question=${encodeURIComponent(question)}`, {
@@ -179,17 +179,58 @@ export function VoicePanel(props: {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       if (!data.transcript) {
-        addRow({ role: "system", text: "Nothing understood in the recording: question skipped." });
-        setCurrentQuestion((q) => (q === question ? "" : q));
+        addRow({ role: "system", text: question ? "Nothing understood in the recording: question skipped." : "Nothing understood in the note." });
+        if (question) setCurrentQuestion((q) => (q === question ? "" : q));
       } else {
         showAnswerResult(question, data.transcript, data);
       }
     } catch (err) {
-      addRow({ role: "system", text: `Could not process the spoken answer: ${(err as Error)?.message ?? err}` });
+      addRow({ role: "system", text: `Could not process the recording: ${(err as Error)?.message ?? err}` });
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  /** Mic on for one answer, then off. Enter / Stop = done, Esc / Discard = skip, silence = done. */
+  const listenForAnswer = async (question: string) => {
+    const audio = await record("answer");
+    // flight ended, a new question arrived, a note was started, or the answer was typed meanwhile
+    if (!liveRef.current.sessionActive || liveRef.current.currentQuestion !== question) return;
+    if (!audio) {
+      await skipQuestion(question, "No answer recorded: question skipped.");
+      return;
+    }
+    await sendVoice(audio, question);
+  };
+
+  /** The pilot's own note, without a question. The apprentice holds its questions until it is sent. */
+  const recordNote = async () => {
+    if (!liveRef.current.sessionActive || recordingRef.current || noteActiveRef.current) return;
+    noteActiveRef.current = true;
+    try {
+      await recordAndSendNote();
+    } finally {
+      noteActiveRef.current = false;
+    }
+  };
+  const recordAndSendNote = async () => {
+    stopSpeaking();
+    const dropped = liveRef.current.currentQuestion;
+    liveRef.current.currentQuestion = "";
+    setCurrentQuestion("");
+    if (dropped) addRow({ role: "system", text: "Question dropped: recording your note instead." });
+    await fetch(`${API_URL}/dialogue/pilot-note?active=true`, { method: "POST" }).catch(() => {});
+
+    const audio = await record("note");
+    if (!audio || !liveRef.current.sessionActive) {
+      await fetch(`${API_URL}/dialogue/pilot-note?active=false`, { method: "POST" }).catch(() => {});
+      if (liveRef.current.sessionActive) addRow({ role: "system", text: "Note discarded." });
+      return;
+    }
+    await sendVoice(audio, "");
+  };
+  const recordNoteRef = useRef(recordNote);
+  recordNoteRef.current = recordNote;
 
   /** New question: show it, speak it, then listen for the answer. */
   const askAndListen = async (question: string, t?: number, meta: QuestionMeta = {}) => {
@@ -204,6 +245,18 @@ export function VoicePanel(props: {
       await listenForAnswer(question);
     }
   };
+
+  // R: record a note (expert mode, during a flight, mic closed, not typing)
+  useEffect(() => {
+    if (mode !== "expert" || !sessionActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.repeat) return;
+      if (e.key.toLowerCase() === "r") recordNoteRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode, sessionActive]);
 
   // Enter / Esc while the mic is open
   useEffect(() => {
@@ -222,7 +275,8 @@ export function VoicePanel(props: {
   useEffect(() => {
     if (latestQuestion?.question && latestQuestion.question !== lastQuestionRef.current) {
       lastQuestionRef.current = latestQuestion.question;
-      if (sessionActive) {
+      // a question sent just before Record a note: the backend already dropped it
+      if (sessionActive && !noteActiveRef.current) {
         askAndListen(latestQuestion.question, latestQuestion.t, {
           slotName: latestQuestion.slot_name,
           kind: latestQuestion.kind,
@@ -287,7 +341,7 @@ export function VoicePanel(props: {
       const res = await fetch(`${API_URL}/dialogue/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, question: question || "General inspection insight", answer: ans }),
+        body: JSON.stringify({ session_id: sessionId, question, answer: ans }), // no question: a note
       });
       const data = await res.json();
       if (data.ok) {
@@ -324,15 +378,20 @@ export function VoicePanel(props: {
     }
   };
 
-  const voiceStatus = listening
-    ? "🎙 Listening… Enter = done · Esc = skip"
-    : isSubmitting
-      ? "⏳ Processing answer…"
-      : audioPlaying
-        ? "🔊 Speaking"
-        : sessionActive
-          ? "Ready: questions are spoken, mic opens after each one"
-          : "Start a flight to begin";
+  const voiceStatus =
+    recording === "note"
+      ? "🎙 Recording your note… Enter = save · Esc = discard"
+      : recording === "answer"
+        ? "🎙 Listening… Enter = done · Esc = skip"
+        : isSubmitting
+          ? "⏳ Processing…"
+          : audioPlaying
+            ? "🔊 Speaking"
+            : sessionActive
+              ? mode === "expert"
+                ? "Ready: mic opens after each question · R = record a note"
+                : "Ready"
+              : "Start a flight to begin";
 
   return (
     <div className="voice-panel" style={hidden ? { display: "none" } : undefined}>
@@ -375,10 +434,29 @@ export function VoicePanel(props: {
             )}
           </div>
 
+          {/* Manual mic control: record a note on your own, or stop a recording that doesn't end */}
+          <div className="record-controls">
+            {listening ? (
+              <>
+                <span className="rec-indicator">● {recording === "note" ? "Recording your note" : "Recording your answer"}</span>
+                <button className="btn-primary" onClick={() => recordingRef.current?.finish()}>
+                  ⏹ Stop &amp; save
+                </button>
+                <button className="btn-sm" onClick={() => recordingRef.current?.cancel()}>
+                  Discard
+                </button>
+              </>
+            ) : (
+              <button className="btn-record" onClick={recordNote} disabled={!sessionActive || isSubmitting}>
+                🎙 Record a note <kbd>R</kbd>
+              </button>
+            )}
+          </div>
+
           <div className="answer-input-group">
             <input
               type="text"
-              placeholder="Speak after the beep, or type your answer here..."
+              placeholder={currentQuestion ? "Speak after the beep, or type your answer here..." : "Type a note for the apprentice..."}
               value={answerInput}
               onChange={(e) => setAnswerInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && submitAnswer()}

@@ -1,14 +1,21 @@
-// Microphone for spoken answers: opened only after a question has been read, closed automatically.
+// Microphone for spoken answers (opened after a question has been read) and for the pilot's own
+// notes (opened with Record a note). Closed automatically on silence, or with Stop / Discard.
 
 const SPEECH_LEVEL = 0.02; // RMS above this counts as talking
-const SILENCE_MS = 2000; // stop this long after the pilot stops talking
-const NO_SPEECH_MS = 8000; // give up if nothing is said
-const MAX_MS = 30000; // hard limit for one answer
+
+export type RecordingLimits = {
+  silenceMs: number; // stop this long after the pilot stops talking
+  noSpeechMs: number; // give up if nothing is said
+  maxMs: number; // hard limit
+};
+export const ANSWER_LIMITS: RecordingLimits = { silenceMs: 2000, noSpeechMs: 8000, maxMs: 30000 };
+// A note has no question to frame it: the pilot pauses to think, so wait longer
+export const NOTE_LIMITS: RecordingLimits = { silenceMs: 4000, noSpeechMs: 10000, maxMs: 60000 };
 
 export type AnswerRecording = {
   done: Promise<Blob | null>; // null = nothing said, skipped or cancelled
-  finish: () => void; // Enter: stop now and keep the answer
-  cancel: () => void; // Esc / end of flight: stop now and discard
+  finish: () => void; // Enter / Stop: stop now and keep the recording
+  cancel: () => void; // Esc / Discard / end of flight: stop now and throw it away
 };
 
 /** Ask for microphone permission once (on Start Flight), then release the mic straight away. */
@@ -35,7 +42,7 @@ export function beep(): void {
   osc.onended = () => ctx.close();
 }
 
-export async function recordAnswer(): Promise<AnswerRecording> {
+export async function recordAnswer(limits: RecordingLimits = ANSWER_LIMITS): Promise<AnswerRecording> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const recorder = new MediaRecorder(stream);
   const chunks: Blob[] = [];
@@ -75,8 +82,8 @@ export async function recordAnswer(): Promise<AnswerRecording> {
       heardSpeech = true;
       lastSpeech = now;
     }
-    const silentTooLong = heardSpeech ? now - lastSpeech > SILENCE_MS : now - started > NO_SPEECH_MS;
-    if (silentTooLong || now - started > MAX_MS) stop();
+    const silentTooLong = heardSpeech ? now - lastSpeech > limits.silenceMs : now - started > limits.noSpeechMs;
+    if (silentTooLong || now - started > limits.maxMs) stop();
   }, 100);
 
   recorder.start();

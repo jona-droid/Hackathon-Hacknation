@@ -49,6 +49,8 @@ class SimRuntime:
     pending_follow_up: dict[str, Any] | None = None
     # pilot just did a task differently from a learned rule: {"t", "slot", "expected", "now", "rule"}
     pending_deviation: dict[str, Any] | None = None
+    # sim time the pilot started recording their own note; the apprentice doesn't ask meanwhile
+    pilot_note_since: float | None = None
     # bumped on every session start/stop; LLM results from an older epoch are discarded
     session_epoch: int = 0
 
@@ -69,6 +71,7 @@ class SimRuntime:
         self.latest_advice = None
         self.pending_follow_up = None
         self.pending_deviation = None
+        self.pilot_note_since = None
         return recorder
 
     def reset(self, mode: str = "expert") -> None:
@@ -84,6 +87,7 @@ class SimRuntime:
         self.observer_busy = False
         self.pending_follow_up = None
         self.pending_deviation = None
+        self.pilot_note_since = None
         self.latest_question = None
         self.latest_advice = None
         self.last_question_time = -999.0

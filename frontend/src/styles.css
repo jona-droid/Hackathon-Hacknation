@@ -499,3 +499,21 @@ main { display: flex; flex: 1; min-height: 0; }
 .slot-detail p { margin: 4px 0; line-height: 1.4; color: #e6edf3; }
 .slot-detail .slot-condition { color: #d2a8ff; }
 .slot-detail .slot-evidence, .slot-detail .slot-empty { color: var(--text-dim); }
+
+/* Manual mic control */
+.record-controls { display: flex; gap: 8px; align-items: center; }
+.rec-indicator { flex: 1; font-size: 0.82rem; font-weight: 600; color: var(--danger); animation: rec-blink 1.2s infinite; }
+@keyframes rec-blink { 50% { opacity: 0.45; } }
+.btn-record {
+  flex: 1;
+  background: rgba(248, 81, 73, 0.12);
+  color: #ffa198;
+  border: 1px solid rgba(248, 81, 73, 0.45);
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-record:hover:not(:disabled) { background: rgba(248, 81, 73, 0.2); }
+.btn-record:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-record kbd { font-size: 0.7rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; margin-left: 4px; opacity: 0.8; }
