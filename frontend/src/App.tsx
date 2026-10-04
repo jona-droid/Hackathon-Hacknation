@@ -10,6 +10,8 @@ import { primeMicrophone } from "./recordAnswer";
 import { API_URL } from "./config";
 
 const FRAME_MAX_WIDTH = 768;
+const TRAIL_SPACING_M = 0.5; // new path point once the drone has moved this far
+const TRAIL_MAX_POINTS = 6000;
 
 export function App() {
   const [mode, setMode] = useState<"expert" | "novice">("expert");
@@ -23,6 +25,23 @@ export function App() {
 
   const { state, events, latestQuestion, latestAdvice, latestObservation, sendKeys, sendFrame } = useSimSocket();
   const lastFrameSendTime = useRef<number>(0);
+
+  // Flight path since take-off: points spaced TRAIL_SPACING_M apart, cleared on Start or sim reset
+  const [trail, setTrail] = useState<number[][]>([]);
+  const lastTrailT = useRef<number>(0);
+  useEffect(() => {
+    if (!state?.pos) return;
+    const t = state.t;
+    const p = state.pos;
+    const reset = t < lastTrailT.current;
+    lastTrailT.current = t;
+    setTrail((prev) => {
+      const base = reset ? [] : prev;
+      const last = base[base.length - 1];
+      if (last && Math.hypot(p[0] - last[0], p[1] - last[1], p[2] - last[2]) < TRAIL_SPACING_M) return base;
+      return [...base.slice(-(TRAIL_MAX_POINTS - 1)), [p[0], p[1], p[2]]];
+    });
+  }, [state]);
 
   // Load 3D scene data (defects are re-drawn on every flight, so it is reloaded on Start)
   const loadScene = () =>
@@ -95,6 +114,7 @@ export function App() {
       setSessionId(body.session_id);
       setInspected(new Set());
       setWarning(null);
+      setTrail([]);
       loadScene();
     } catch (err) {
       console.error("Failed to start session:", err);
@@ -190,7 +210,7 @@ export function App() {
       <main>
         {/* Left Section: 3D Simulation & Flight Gauges */}
         <section className="left" tabIndex={0}>
-          <Scene3D scene={scene} pos={pos} yaw={yaw} inspected={inspected} />
+          <Scene3D scene={scene} pos={pos} yaw={yaw} inspected={inspected} trail={trail} />
           <Hud
             state={state}
             warning={warning}
@@ -201,7 +221,7 @@ export function App() {
             })}
             mode={mode}
           />
-          <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} />
+          <MiniMap scene={scene} pos={pos} yaw={yaw} inspected={inspected} trail={trail} />
         </section>
 
         {/* Right Section: Interaction Tabs */}

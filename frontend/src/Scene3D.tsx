@@ -308,8 +308,8 @@ const World = memo(function World({ scene, inspected }: { scene: SceneData; insp
   );
 });
 
-export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: number; inspected: Set<string> }) {
-  const { scene, pos, yaw, inspected } = props;
+export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: number; inspected: Set<string>; trail: number[][] }) {
+  const { scene, pos, yaw, inspected, trail } = props;
   // preserveDrawingBuffer: lets App capture camera frames with toDataURL (blank otherwise)
   return (
     <Canvas shadows camera={{ fov: 80, near: 0.05, far: 600 }} gl={{ preserveDrawingBuffer: true }}>
@@ -335,6 +335,8 @@ export function Scene3D(props: { scene: SceneData | null; pos: number[]; yaw: nu
       </mesh>
       <gridHelper args={[400, 80, "#3f6a2e", "#466f34"]} position={[60, 0, 0.02]} rotation={[Math.PI / 2, 0, 0]} />
       {scene && <World scene={scene} inspected={inspected} />}
+      {/* flight path since take-off */}
+      {trail.length > 1 && <Line points={trail as V3[]} color="#ff8c00" lineWidth={2.5} transparent opacity={0.85} />}
     </Canvas>
   );
 }
