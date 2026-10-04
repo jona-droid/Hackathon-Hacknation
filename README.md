@@ -1,4 +1,4 @@
-# Power Line AI Apprentice
+# Drone AI Apprentice
 
 > **Autonomous Tacit Know-How Capture, Real-Time Model Predictive Safety, and AI Coaching for Critical Infrastructure Drone Inspection.**
 

@@ -1,4 +1,4 @@
-# Power Line AI Apprentice — Pipeline Architecture
+# Drone AI Apprentice — Pipeline Architecture
 
 > An industrial Ground Control Station (GCS) and digital twin simulation for autonomous capture of expert drone pilot know-how, predictive collision avoidance, and novice coaching.
 
@@ -108,7 +108,7 @@ For each candidate maneuver $k$, the discrete-time forward state transition $x_{
 
 #### A. Velocity Error & PI Autopilot Command
 - **Velocity Error**: $e_i = v_{\text{target}}^{(k)} - v_i$
-- **Integral Accumulator**: $I_{i+1} = \operatorname{clamp}(I_i + K_I \odot e_i \Delta t, \;-I_{\max}, \;I_{\max})$
+- **Integral Accumulator**: $I_{i+1} = \text{clamp}(I_i + K_I \odot e_i \Delta t, \;-I_{\max}, \;I_{\max})$
 - **Commanded Acceleration**: $a_{\text{cmd}, i} = K_P \odot e_i + I_i$ (subject to saturation $\|a_{\text{cmd}, i}^{xy}\| \le a_{\max}^{xy}$)
 
 #### B. First-Order Attitude Lag
@@ -150,7 +150,7 @@ $$
 The optimal trajectory $u^*$ minimizes a multi-objective cost functional:
 
 $$
-J(u^{(k)}) = J_{\text{effort}}(u^{(k)}) + \sum_{i=1}^{N} \gamma_i \Big( C_{\text{danger}}(p_i^{(k)}) + C_{\text{caution}}(p_i^{(k)}) \Big) + C_{\text{crash}}(u^{(k)}) + C_{\text{terminal}}(u^{(k)}) + C_{\text{road}}(p_i^{(k)})
+J(u^{(k)}) = J_{\text{effort}}(u^{(k)}) + \sum_{i=1}^{N} \gamma_i ( C_{\text{danger}}(p_i^{(k)}) + C_{\text{caution}}(p_i^{(k)}) ) + C_{\text{crash}}(u^{(k)}) + C_{\text{terminal}}(u^{(k)}) + C_{\text{road}}(p_i^{(k)})
 $$
 
 $$
@@ -163,10 +163,10 @@ $$
   $\gamma_i = 1.0 - 0.5 (i / N)$ — near-term hazard proximity is penalized higher than distant projections.
 
 - **Hazard Clearance Penalties**:
-  For hazards $h \in \{\text{cable}, \text{tower}, \text{tree}\}$ with Euclidean clearance $d_i^h = \operatorname{dist}(p_i, \mathcal{H}_h)$:
-  - **Danger Zone**: $C_{\text{danger}}(p_i) = 30.0 \sum_h \max(0, \;d_{\text{danger}}^h - d_i^h)^2 \cdot \mathbf{1}_{\text{closing}}$
-  - **Caution Zone**: $C_{\text{caution}}(p_i) = 2.0 \sum_h \max(0, \;d_{\text{caution}}^h - d_i^h)^2 \cdot \mathbf{1}_{\text{closing}}$
-  *(Envelopes: $d_{\text{danger}}^{\text{cable}} = 2.0\text{ m}$, $d_{\text{caution}}^{\text{cable}} = 4.0\text{ m}$, $d_{\text{danger}}^{\text{struct}} = 1.5\text{ m}$, $d_{\text{caution}}^{\text{struct}} = 3.0\text{ m}$)*
+  For hazards $h \in \{\text{cable}, \text{tower}, \text{tree}\}$ with Euclidean clearance $d_i^h = \text{dist}(p_i, \mathcal{H}_h)$:
+  - **Danger Zone**: $C_{\text{danger}}(p_i) = 30.0 \sum_h \max(0, \;d_{\text{danger}}^h - d_i^h)^2 \cdot \text{closing}$
+  - **Caution Zone**: $C_{\text{caution}}(p_i) = 2.0 \sum_h \max(0, \;d_{\text{caution}}^h - d_i^h)^2 \cdot \text{closing}$
+  *(Envelopes: $d_{\text{danger}}^{\text{cable}} = 2.0\text{ m}$, $d_{\text{caution}}^{\text{cable}} = 4.0\text{ m}$, $d_{\text{danger}}^{\text{struct}} = 1.5\text{ m}$, $d_{\text{caution}}^{\text{struct}} = 3.0\text{ m}$; $\text{closing} = 1$ when approaching, $0$ otherwise)*
 
 - **Catastrophic Crash Barrier**:
   $C_{\text{crash}} = 1000 + 500 (1 - i_{\text{crash}}/N)$ if $d_i^{\text{cable}} < 0.45\text{ m}$ or $d_i^{\text{struct}} < 0.35\text{ m}$.
