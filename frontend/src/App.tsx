@@ -6,6 +6,7 @@ import { MiniMap } from "./MiniMap";
 import { Scene3D, SceneData } from "./Scene3D";
 import { VoicePanel } from "./VoicePanel";
 import { useSimSocket } from "./useSimSocket";
+import { primeMicrophone } from "./recordAnswer";
 import { API_URL } from "./config";
 
 export function App() {
@@ -66,6 +67,10 @@ export function App() {
 
   // Session Start
   const startSession = async () => {
+    // Ask for the microphone once here (a click is required); it is only switched on after each question.
+    if (mode === "expert" && !(await primeMicrophone())) {
+      alert("Microphone blocked: you can still type your answers. Allow the mic in the browser to answer by voice.");
+    }
     try {
       const res = await fetch(`${API_URL}/session/start`, {
         method: "POST",
