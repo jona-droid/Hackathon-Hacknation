@@ -23,10 +23,29 @@ export function Hud({
   const isLowClearance = cableDist !== null && cableDist < 2.0;
   const compassBad = (state?.compass_interference ?? 0) > 0.3;
   const windFrom = state?.wind_from_deg ?? 0;
+  const kb = state?.knowledge;
 
   return (
     <div className="hud">
       <div className="hud-badge">{mode === "expert" ? "Expert Flight" : "Novice Training"}</div>
+      <div className="hud-row">
+        <span>Task:</span> <strong>{state?.task_name ?? "—"}</strong>
+      </div>
+      {kb && (
+        <div className="hud-knowledge" title={`${kb.filled} rules learned, ${kb.confirmed} seen again in later flights`}>
+          <div className="hud-row">
+            <span>Knowledge:</span>
+            <strong>
+              {kb.filled}/{kb.total}
+              {kb.confirmed > 0 && <em> · {kb.confirmed} confirmed</em>}
+            </strong>
+          </div>
+          <div className="kb-bar">
+            <div className="kb-bar-filled" style={{ width: `${(100 * kb.filled) / kb.total}%` }} />
+            <div className="kb-bar-confirmed" style={{ width: `${(100 * kb.confirmed) / kb.total}%` }} />
+          </div>
+        </div>
+      )}
       <div className="hud-row">
         <span>Altitude:</span> <strong>{state?.altitude?.toFixed(1) ?? "0.0"} m</strong>
       </div>

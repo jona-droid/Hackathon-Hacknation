@@ -66,35 +66,54 @@ async def trigger_question() -> dict[str, Any]:
     return payload
 
 
-def _close_pending_question(answer: str) -> None:
+def _close_pending_question(answer: str) -> dict[str, Any] | None:
     """Record the answer on the latest unanswered question so the observer can ask again."""
     for qa in reversed(runtime.qa_history):
         if qa["answer"] is None:
             qa["answer"] = answer
-            break
+            return qa
+    return None
 
 
-async def _process_answer(question: str, answer: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
-    telemetry = runtime.drone.snapshot()
-    _close_pending_question(answer)
-    context = context or {
-        "telemetry": telemetry,
-        "event": runtime.latest_question.get("event") if runtime.latest_question else {"type": "inspection"},
-    }
+def _measured(qa: dict[str, Any]) -> tuple[str | None, dict[str, float]]:
+    """Task and telemetry signature of the episode the question was about (current one if unknown)."""
+    log = runtime.flight_log
+    ep = log.find_episode(**qa["episode"]) if qa.get("episode") else log.current_episode()
+    return (ep.task, ep.signature) if ep else (None, {})
+
+
+async def _process_answer(question: str, answer: str) -> dict[str, Any]:
+    t = runtime.drone.elapsed_time
+    qa = _close_pending_question(answer)
+    if not qa or qa["question"] != question:
+        qa = {}  # typed note without a question: let the knowledge manager pick the slot
+    measured_task, measured = _measured(qa)
 
     result = await asyncio.to_thread(
         runtime.knowledge_manager.process_operator_response,
         question=question,
         answer=answer,
-        context=context,
+        target_slot=qa.get("slot"),
+        deviation=qa.get("deviation"),
+        measured=measured,
+        measured_task=measured_task,
+        session=runtime.recorder.session_id if runtime.recorder else None,
+        t=t,
     )
 
-    # Record to session transcript
+    # One follow-up per question, asked by the observer loop at the next calm moment
+    if result.get("follow_up") and qa.get("kind") != "follow_up" and runtime.session_active:
+        runtime.pending_follow_up = {"t": runtime.drone.elapsed_time, "question": result["follow_up"],
+                                     "slot": result.get("slot") or qa.get("slot")}
+    else:
+        result["follow_up"] = ""
+
     if runtime.recorder:
         runtime.recorder.record_transcript({
             "role": "expert_operator",
             "text": answer,
-            "t": telemetry["t"],
+            "t": t,
+            "slot": result.get("slot"),
             "distilled_insight": result.get("insight"),
         })
 
@@ -105,7 +124,7 @@ async def _process_answer(question: str, answer: str, context: dict[str, Any] | 
 async def receive_operator_answer(payload: AnswerRequest) -> dict[str, Any]:
     if not payload.answer.strip():
         raise HTTPException(status_code=400, detail="Answer cannot be empty")
-    return await _process_answer(payload.question, payload.answer, payload.context)
+    return await _process_answer(payload.question, payload.answer)
 
 
 def _transcribe(audio: bytes, content_type: str) -> str:

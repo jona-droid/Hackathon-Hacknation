@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from backend.core.config import ANTHROPIC_API_KEY
 
 logger = logging.getLogger("robot-apprentice.llm")
+T = TypeVar("T", bound=BaseModel)
 
 # Knowledge distillation, flight summary and comparison: rare calls where quality matters.
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -82,6 +85,30 @@ class LLMClient:
             raise RuntimeError("Claude declined the request")
         text_parts = [block.text for block in response.content if block.type == "text"]
         return "".join(text_parts).strip()
+
+    def parse(self, prompt: str, system: str, output_format: type[T], max_tokens: int = 1000) -> T:
+        """Structured output validated against a Pydantic model."""
+        if not self.is_available:
+            raise RuntimeError("Anthropic client is not configured (missing ANTHROPIC_API_KEY).")
+        messages = [{"role": "user", "content": prompt}]
+        if self.model.startswith("claude-haiku"):
+            response = self._client.messages.parse(
+                model=self.model, system=system, messages=messages, max_tokens=max_tokens, output_format=output_format,
+            )
+        else:
+            response = self._client.beta.messages.parse(
+                model=self.model,
+                system=system,
+                messages=messages,
+                max_tokens=max_tokens + 8000,
+                output_config={"effort": "low"},
+                output_format=output_format,
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            )
+        if response.stop_reason in ("refusal", "max_tokens") or response.parsed_output is None:
+            raise RuntimeError(f"No structured answer from Claude (stop_reason={response.stop_reason})")
+        return response.parsed_output
 
     def call_json(
         self,

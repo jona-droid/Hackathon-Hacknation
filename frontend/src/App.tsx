@@ -79,6 +79,12 @@ export function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Refresh the knowledge tab when the apprentice learns or confirms a rule (confirmations happen without an answer)
+  const kb = state?.knowledge;
+  useEffect(() => {
+    if (kb) setKbRefreshKey((k) => k + 1);
+  }, [kb?.filled, kb?.confirmed]);
+
   // Session Start
   const startSession = async () => {
     // Ask for the microphone once here (a click is required); it is only switched on after each question.

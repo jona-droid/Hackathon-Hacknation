@@ -12,6 +12,7 @@ from backend.api.observer import observer_loop
 from backend.core.config import BROADCAST_HZ, SIM_HZ
 from backend.core.state import runtime
 from backend.sim.scene import scene_json
+from backend.storage import competence_store
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("robot-apprentice.server")
@@ -86,6 +87,7 @@ async def sim_loop() -> None:
             state["inspected_count"] = len(runtime.detector.inspected)
             state["defects_spotted"] = list(runtime.detector.defects_spotted)
             runtime.flight_log.record(state)
+            state["task"] = runtime.flight_log.tasks.current  # competence-grid task the pilot is doing
 
             for ev in events:
                 await broadcast({"type": "event", **ev})
@@ -102,7 +104,14 @@ async def sim_loop() -> None:
 
             now = time.perf_counter()
             if now - last_broadcast >= broadcast_interval:
-                await broadcast({"type": "state", **state, "session_active": runtime.session_active})
+                task = state["task"]
+                await broadcast({
+                    "type": "state",
+                    **state,
+                    "task_name": competence_store.TASKS[task]["short"] if task else None,
+                    "knowledge": competence_store.coverage(),
+                    "session_active": runtime.session_active,
+                })
                 last_broadcast = now
 
             await asyncio.sleep(dt)

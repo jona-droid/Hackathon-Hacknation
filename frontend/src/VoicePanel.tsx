@@ -4,6 +4,16 @@ import { API_URL } from "./config";
 import { AnswerRecording, beep, recordAnswer } from "./recordAnswer";
 
 type TranscriptRow = { role: string; text: string; t?: number; tag?: string };
+type QuestionMeta = { slotName?: string | null; kind?: AIQuestion["kind"] };
+type AnswerResult = {
+  insight?: string | null;
+  rejected?: boolean;
+  slot_name?: string | null;
+  follow_up?: string;
+  error?: string;
+};
+
+const KIND_TAG: Record<string, string> = { deviation: "Rule check", follow_up: "Follow-up" };
 
 // Voice loop (expert mode): Claude's question is spoken with ElevenLabs text-to-speech, then the mic
 // opens for one answer only, closes on silence, and the audio is transcribed by ElevenLabs on the backend.
@@ -36,7 +46,8 @@ export function VoicePanel(props: {
   const [answerInput, setAnswerInput] = useState<string>("");
   const [noviceQueryInput, setNoviceQueryInput] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [lastSavedInsight, setLastSavedInsight] = useState<string | null>(null);
+  const [lastSavedInsight, setLastSavedInsight] = useState<{ slot?: string | null; text: string } | null>(null);
+  const [currentMeta, setCurrentMeta] = useState<QuestionMeta>({});
   const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
   const [listening, setListening] = useState<boolean>(false);
 
@@ -108,12 +119,21 @@ export function VoicePanel(props: {
   };
 
   // ---- answers ----
-  const showAnswerResult = (question: string, answer: string, data: { insight?: string | null; rejected?: boolean }) => {
+  const showAnswerResult = (question: string, answer: string, data: AnswerResult) => {
     addRow({ role: "expert_operator", text: answer, t: simTime, tag: "Answer" });
-    if (data.rejected) {
-      addRow({ role: "system", text: "Not saved: no usable know-how in that answer." });
+    if (data.error) {
+      addRow({ role: "system", text: `Not saved: the knowledge model failed (${data.error}).` });
+    } else if (data.rejected) {
+      addRow({
+        role: "system",
+        text: data.follow_up
+          ? "Not saved yet: too vague. A follow-up question will come at a calm moment."
+          : "Not saved: no usable know-how in that answer.",
+      });
     } else if (data.insight) {
-      setLastSavedInsight(data.insight);
+      setLastSavedInsight({ slot: data.slot_name, text: data.insight });
+      addRow({ role: "system", text: `Learned${data.slot_name ? ` (${data.slot_name})` : ""}: ${data.insight}` });
+      if (data.follow_up) addRow({ role: "system", text: "Saved; a follow-up question will make it more precise." });
       onKnowledgeUpdated?.();
     }
     setCurrentQuestion((q) => (q === question ? "" : q)); // answered; wait for the next one
@@ -172,12 +192,13 @@ export function VoicePanel(props: {
   };
 
   /** New question: show it, speak it, then listen for the answer. */
-  const askAndListen = async (question: string, t?: number) => {
+  const askAndListen = async (question: string, t?: number, meta: QuestionMeta = {}) => {
     recordingRef.current?.cancel();
     lastQuestionRef.current = question;
     liveRef.current.currentQuestion = question;
     setCurrentQuestion(question);
-    addRow({ role: "apprentice_model", text: question, t, tag: "Question" });
+    setCurrentMeta(meta);
+    addRow({ role: "apprentice_model", text: question, t, tag: KIND_TAG[meta.kind ?? ""] ?? "Question" });
     const spoken = await speakText(question);
     if (spoken && mode === "expert" && liveRef.current.sessionActive && liveRef.current.currentQuestion === question) {
       await listenForAnswer(question);
@@ -201,7 +222,12 @@ export function VoicePanel(props: {
   useEffect(() => {
     if (latestQuestion?.question && latestQuestion.question !== lastQuestionRef.current) {
       lastQuestionRef.current = latestQuestion.question;
-      if (sessionActive) askAndListen(latestQuestion.question, latestQuestion.t);
+      if (sessionActive) {
+        askAndListen(latestQuestion.question, latestQuestion.t, {
+          slotName: latestQuestion.slot_name,
+          kind: latestQuestion.kind,
+        });
+      }
     }
   }, [latestQuestion]);
 
@@ -240,7 +266,9 @@ export function VoicePanel(props: {
         alert(data.detail ?? "Could not get a question from the apprentice.");
         return;
       }
-      if (data.question && liveRef.current.sessionActive) askAndListen(data.question, data.t);
+      if (data.question && liveRef.current.sessionActive) {
+        askAndListen(data.question, data.t, { slotName: data.slot_name, kind: data.kind });
+      }
     } catch (err) {
       console.error("Failed to trigger question:", err);
     }
@@ -333,6 +361,12 @@ export function VoicePanel(props: {
 
           <div className="question-card">
             <strong>Current Question:</strong>
+            {currentQuestion && currentMeta.slotName && (
+              <div className="question-slot">
+                {KIND_TAG[currentMeta.kind ?? ""] && <span className="badge">{KIND_TAG[currentMeta.kind ?? ""]}</span>}
+                Learning: {currentMeta.slotName}
+              </div>
+            )}
             <p>{currentQuestion || "Fly the drone to trigger questions or click 'Ask Question Now'."}</p>
             {currentQuestion && (
               <button className="btn-icon" onClick={() => speakText(currentQuestion)} disabled={listening}>
@@ -356,8 +390,8 @@ export function VoicePanel(props: {
 
           {lastSavedInsight && (
             <div className="insight-badge">
-              <strong>Knowledge Acquired:</strong>
-              <div>{lastSavedInsight}</div>
+              <strong>Knowledge Acquired{lastSavedInsight.slot ? ` · ${lastSavedInsight.slot}` : ""}:</strong>
+              <div>{lastSavedInsight.text}</div>
             </div>
           )}
         </div>

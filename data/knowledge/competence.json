@@ -1,0 +1,16 @@
+{
+  "structure_approach.structure_check": {
+    "confidence": "once",
+    "confirmations": 0,
+    "evidence": {},
+    "answers": [
+      {
+        "q": "When you inspect an insulator string, what distance do you aim for and what stops you getting closer?",
+        "a": "Well, looking for the bird nest I ju- I just witnessed. I'm very, uh, preoccupied by the fact that it's so close to the electric line"
+      }
+    ],
+    "rule": "When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.",
+    "conditions": [],
+    "reason": "a bird nest close to the electric line is a concern"
+  }
+}

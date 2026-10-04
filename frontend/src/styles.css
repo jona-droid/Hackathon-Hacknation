@@ -464,3 +464,38 @@ main { display: flex; flex: 1; min-height: 0; }
   margin-top: 2px;
   max-width: 260px;
 }
+
+/* Knowledge gauge (HUD) */
+.hud-knowledge { margin: 2px 0 8px; }
+.hud-knowledge em { font-style: normal; color: var(--success); font-weight: 500; }
+.kb-bar { position: relative; height: 5px; background: var(--bg-card); border-radius: 3px; overflow: hidden; }
+.kb-bar-filled, .kb-bar-confirmed { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.4s; }
+.kb-bar-filled { background: var(--warning); }
+.kb-bar-confirmed { background: var(--success); }
+
+.question-slot { font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; display: flex; gap: 6px; align-items: center; }
+
+/* Competence grid (knowledge tab) */
+.grid-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.grid-head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 0.8rem; }
+.grid-head strong { color: #fff; font-size: 0.9rem; }
+.grid-head span { color: var(--text-dim); flex: 1; }
+.grid-task { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 5px; }
+.grid-task-name { width: 140px; flex-shrink: 0; font-size: 0.75rem; color: var(--text-dim); padding-top: 3px; }
+.grid-slots { display: flex; flex-wrap: wrap; gap: 4px; }
+.slot-chip {
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.slot-chip.once { border-color: var(--warning); color: var(--warning); background: rgba(210, 153, 34, 0.12); }
+.slot-chip.confirmed { border-color: var(--success); color: #7ee787; background: rgba(63, 185, 80, 0.14); }
+.slot-chip.open { outline: 1px solid var(--accent); }
+.slot-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 0.8rem; }
+.slot-detail p { margin: 4px 0; line-height: 1.4; color: #e6edf3; }
+.slot-detail .slot-condition { color: #d2a8ff; }
+.slot-detail .slot-evidence, .slot-detail .slot-empty { color: var(--text-dim); }

@@ -42,9 +42,13 @@ class SimRuntime:
     latest_advice: dict[str, Any] | None = None
     last_question_time: float = -999.0
     last_advice_time: float = -999.0
-    # observer questions: [{"t", "question", "answer" (None until answered)}]
+    # observer questions: [{"t", "question", "answer" (None until answered), "slot", "kind", "deviation"}]
     qa_history: list[dict[str, Any]] = field(default_factory=list)
     observer_busy: bool = False
+    # follow-up for a vague answer, asked at the next calm moment: {"t", "question", "slot"}
+    pending_follow_up: dict[str, Any] | None = None
+    # pilot just did a task differently from a learned rule: {"t", "slot", "expected", "now", "rule"}
+    pending_deviation: dict[str, Any] | None = None
     # bumped on every session start/stop; LLM results from an older epoch are discarded
     session_epoch: int = 0
 
@@ -63,6 +67,8 @@ class SimRuntime:
         self.session_epoch += 1
         self.latest_question = None
         self.latest_advice = None
+        self.pending_follow_up = None
+        self.pending_deviation = None
         return recorder
 
     def reset(self, mode: str = "expert") -> None:
@@ -76,6 +82,8 @@ class SimRuntime:
         self.flight_log.reset()
         self.qa_history.clear()
         self.observer_busy = False
+        self.pending_follow_up = None
+        self.pending_deviation = None
         self.latest_question = None
         self.latest_advice = None
         self.last_question_time = -999.0

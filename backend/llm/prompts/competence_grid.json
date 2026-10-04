@@ -1,0 +1,162 @@
+{
+  "purpose": "What the apprentice must learn from the expert to fly a high-voltage line inspection alone. Each task has slots; a slot is filled with a reusable rule (condition -> action -> reason, with a threshold or cue when relevant), never with a one-off anecdote. Telemetry already measures distances, speeds and heights: do not ask for them, use them as evidence and ask for the rule, the threshold, the cue, the condition or the abort criterion behind them. Slots listing 'evidence' are checked against the telemetry of later flights: the same behaviour confirms the rule, a different one makes the apprentice ask what changed.",
+  "slot_types": {
+    "threshold": "a limit or target value and why (how close, how slow, how high)",
+    "procedure": "the order or pattern of actions",
+    "cue": "what the pilot looks at or notices to decide",
+    "condition": "when the pilot does it differently (wind, defect, interference, traffic)",
+    "abort": "what makes the pilot stop, back off or abandon",
+    "assessment": "how the pilot judges severity or what gets reported"
+  },
+  "evidence_metrics": {
+    "duration_s": "length of the task episode",
+    "speed_median": "typical speed (m/s)",
+    "altitude_median": "typical height above ground (m)",
+    "altitude_max": "highest point (m)",
+    "cable_dist_median": "typical distance to the nearest cable (m)",
+    "cable_dz_median": "typical height relative to the nearest cable (m, positive = above)",
+    "insulator_dist_median": "typical distance to the insulator (m)",
+    "pylon_dist_min": "closest distance to the tower (m)",
+    "tree_dist_min": "closest distance to the tree (m)"
+  },
+  "tasks": [
+    {
+      "id": "preflight_takeoff",
+      "name": "Pre-flight checks, take-off and overview",
+      "short": "Take-off & overview",
+      "detect": "from take-off until the drone first comes within 10 m of a tower or 6 m of a cable",
+      "measured": ["climb rate", "altitude reached before the first approach", "launch position"],
+      "slots": [
+        {"id": "go_no_go", "label": "Go / no-go", "type": "condition", "learn": "Weather and wind limits for flying at all; what is checked before take-off", "ask_example": "Before you take off, what wind or weather would make you not fly near the line?"},
+        {"id": "route_plan", "label": "Route plan", "type": "procedure", "learn": "Order of pylons and spans, which side of the line to work from, and why", "ask_example": "How do you decide which pylon to start with and which side of the line to work from?"},
+        {"id": "overview_climb", "label": "Overview climb", "type": "procedure", "learn": "Whether and how high to climb for an overview of the structure before going close, and what is checked from there", "ask_example": "When you climb above the line first, what are you checking from up there before going closer?", "evidence": ["altitude_max"]}
+      ]
+    },
+    {
+      "id": "corridor_transit",
+      "name": "Transit along the line between structures",
+      "short": "Transit along the line",
+      "detect": "moving faster than 1.5 m/s within 20 m of the cables, near nothing else",
+      "measured": ["transit speed", "height", "lateral offset from the cables", "cable_dz"],
+      "slots": [
+        {"id": "transit_position", "label": "Transit position", "type": "threshold", "learn": "Where to fly when moving along the line: above or beside the cables, never between them, and the offset kept", "ask_example": "When you move along the line, what is your rule for where to be relative to the cables?", "evidence": ["cable_dz_median", "cable_dist_median"]},
+        {"id": "transit_speed", "label": "Transit speed", "type": "threshold", "learn": "Speed limits when travelling near the line and where to slow down", "ask_example": "How fast do you allow yourself to travel near the line, and where do you start slowing down?", "evidence": ["speed_median"]},
+        {"id": "sag_following", "label": "Following the sag", "type": "procedure", "learn": "How the cable sag between pylons changes the flight height", "ask_example": "How do you deal with the cable dipping between pylons when you follow it?", "evidence": ["cable_dz_median"]}
+      ]
+    },
+    {
+      "id": "structure_approach",
+      "name": "Approach to a pylon",
+      "short": "Tower approach",
+      "detect": "within 10 m of a tower, not hovering at an insulator",
+      "measured": ["approach speed", "stopping distance", "approach direction and height"],
+      "slots": [
+        {"id": "approach_path", "label": "Approach path", "type": "procedure", "learn": "Direction, height and speed of the final approach to a tower, and where to stop first", "ask_example": "When you come up to a tower, from which direction and height do you like to arrive, and why?", "evidence": ["speed_median", "cable_dz_median"]},
+        {"id": "structure_check", "label": "Tower check", "type": "cue", "learn": "What is checked on the tower itself: lean, bent members, corrosion, missing bolts, bird nests on the crossarm", "ask_example": "When you first look at a tower, what tells you the structure itself has a problem?"},
+        {"id": "structure_clearance", "label": "Tower clearance", "type": "threshold", "learn": "Minimum distance kept from the tower body and crossarm", "ask_example": "What is the closest you will go to the tower or crossarm, and what decides that distance?", "evidence": ["pylon_dist_min"]}
+      ]
+    },
+    {
+      "id": "insulator_inspection",
+      "name": "Close inspection of an insulator string",
+      "short": "Insulator inspection",
+      "detect": "slower than 1 m/s within 7 m of an insulator",
+      "measured": ["insulator_dist", "height relative to the cable", "dwell time", "viewing side"],
+      "slots": [
+        {"id": "viewpoints", "label": "Viewpoints", "type": "procedure", "learn": "Which viewpoints are needed for a complete check (top attachment at the crossarm, the discs, the bottom clamp on the cable) and from which side or height", "ask_example": "To inspect an insulator string completely, which views do you need, and in what order?"},
+        {"id": "inspection_standoff", "label": "Inspection distance", "type": "threshold", "learn": "Distance kept from the string while inspecting, and what limits going closer", "ask_example": "What distance do you aim for when you inspect a string, and what stops you going closer?", "evidence": ["insulator_dist_median", "cable_dz_median"]},
+        {"id": "defect_cues", "label": "Defect cues", "type": "cue", "learn": "How each insulator defect is recognised: broken or shattered disc, flashover soot, pollution coating, cracks", "ask_example": "What exactly do you look for on the discs to tell a damaged insulator from a healthy one?"},
+        {"id": "dwell", "label": "Hold time", "type": "threshold", "learn": "How long to hold and how stable the drone must be before the inspection counts", "ask_example": "How long do you hold in front of a string, and what makes you decide it is enough?", "evidence": ["duration_s"]}
+      ]
+    },
+    {
+      "id": "conductor_inspection",
+      "name": "Inspection of the conductors along a span",
+      "short": "Cable inspection",
+      "detect": "within 6 m of a cable, not at an insulator or tower",
+      "measured": ["cable_dist", "cable_dz", "speed along the cable", "orbits around the cable"],
+      "slots": [
+        {"id": "scan_technique", "label": "Scan technique", "type": "procedure", "learn": "Offset, speed and viewing angle while scanning a cable, and whether both sides are checked", "ask_example": "When you scan a cable along the span, how do you position yourself so you do not miss anything?", "evidence": ["cable_dist_median", "cable_dz_median", "speed_median"]},
+        {"id": "conductor_cues", "label": "Cable damage cues", "type": "cue", "learn": "How conductor problems are recognised: broken or birdcaged strands, foreign objects such as a kite, damaged dampers, spacers or splices", "ask_example": "What does a damaged conductor look like from the drone, and where along the span does it usually happen?"},
+        {"id": "zoom_trigger", "label": "Closer-look trigger", "type": "condition", "learn": "What makes the pilot stop, go closer or circle around a section of cable", "ask_example": "What makes you stop and go around a section of cable instead of carrying on?"}
+      ]
+    },
+    {
+      "id": "defect_assessment",
+      "name": "Confirming, rating and reporting a defect",
+      "short": "Defect assessment",
+      "detect": "side task, active alongside the main one for 20 s after a defect_spotted event",
+      "measured": ["time spent", "angles and distances used around the component"],
+      "slots": [
+        {"id": "confirmation", "label": "Confirming a defect", "type": "procedure", "learn": "How a suspected defect is confirmed (extra angles, distance, light) before it is reported", "ask_example": "When you think you have spotted a defect, what do you do to be sure before reporting it?"},
+        {"id": "severity", "label": "Severity", "type": "assessment", "learn": "How severity is judged (repair immediately, within months, or monitor) for each defect type", "ask_example": "How serious is this kind of defect for you: fix now, plan a repair, or just monitor?"},
+        {"id": "report_content", "label": "Report content", "type": "procedure", "learn": "What must be recorded: location (pylon, span, phase, disc), component, views or photos, recommended action", "ask_example": "If you reported this defect, what would the report need to contain for the repair crew?"}
+      ]
+    },
+    {
+      "id": "interference_wind",
+      "name": "Flying with electromagnetic interference and wind",
+      "short": "Interference & wind",
+      "detect": "side task, active alongside the main one: compass interference above 0.3, or wind above 5 m/s within 8 m of a cable",
+      "measured": ["compass_interference", "wind_speed", "drift while hovering", "side of the cable relative to the wind"],
+      "slots": [
+        {"id": "emi_response", "label": "Interference response", "type": "condition", "learn": "How compass interference is noticed near the cables and what the pilot does (yaw correction, more distance, slower, manual flying)", "ask_example": "Close to the cable the heading starts to wander: how do you notice it and what do you do?"},
+        {"id": "emi_distance", "label": "Interference distance", "type": "threshold", "learn": "Distance kept from energised conductors because of interference", "ask_example": "Because of the interference near the conductors, what distance do you keep as your own limit?"},
+        {"id": "wind_side", "label": "Wind side", "type": "condition", "learn": "Which side of a cable or structure to work from in wind, and extra margin taken in gusts", "ask_example": "With this wind, which side of the cable do you prefer to work from, and how much margin do you add in gusts?"}
+      ]
+    },
+    {
+      "id": "road_crossing",
+      "name": "Crossing a road",
+      "short": "Road crossing",
+      "detect": "within 4 m of the road or over it",
+      "measured": ["height while crossing", "time over the road", "crossing angle"],
+      "slots": [
+        {"id": "crossing_rule", "label": "Crossing rule", "type": "procedure", "learn": "How a road is crossed: height, crossing straight and quickly, never hovering above traffic", "ask_example": "What is your rule for crossing a road with the drone?", "evidence": ["altitude_median", "speed_median"]},
+        {"id": "traffic_check", "label": "Traffic check", "type": "cue", "learn": "What is checked before and while crossing, and when the pilot waits or goes around", "ask_example": "What do you check before you cross, and what would make you wait?"}
+      ]
+    },
+    {
+      "id": "vegetation",
+      "name": "Vegetation near the line",
+      "short": "Vegetation",
+      "detect": "within 6 m of the tree",
+      "measured": ["tree_dist", "height relative to the canopy"],
+      "slots": [
+        {"id": "tree_clearance_flight", "label": "Tree clearance", "type": "threshold", "learn": "Distance the drone keeps from trees and how the pilot passes them", "ask_example": "How much room do you give a tree when you fly past it, and why that much?", "evidence": ["tree_dist_min"]},
+        {"id": "encroachment_check", "label": "Tree risk check", "type": "assessment", "learn": "How vegetation is judged as a risk to the line (distance to the conductor, growth towards it, fall-in risk) and when it is reported", "ask_example": "When you look at a tree near the line, what tells you it needs to be reported for trimming?"}
+      ]
+    },
+    {
+      "id": "emergency",
+      "name": "Abort and emergency handling",
+      "short": "Emergency",
+      "detect": "the 4 s after a very_close_cable or collision event",
+      "measured": ["escape direction", "climb after a close call", "minimum distance reached"],
+      "slots": [
+        {"id": "abort_triggers", "label": "Abort triggers", "type": "abort", "learn": "What makes the pilot abort an inspection: control problems, interference, gusts, low battery, losing sight of the drone", "ask_example": "What would make you abandon an inspection and pull away from the line?"},
+        {"id": "escape_manoeuvre", "label": "Escape manoeuvre", "type": "procedure", "learn": "The immediate escape manoeuvre: which direction, climb or back off, and why", "ask_example": "If something goes wrong near the cable, what is your first move to get clear?"},
+        {"id": "return_landing", "label": "Return & landing", "type": "procedure", "learn": "Return path, height and battery reserve for coming home without crossing the line", "ask_example": "How do you plan the way home so you never have to cross the line low on battery?"}
+      ]
+    }
+  ],
+  "industry_reference": {
+    "note": "Published values vary widely between sources and utilities; the expert's own rule is what the apprentice learns. Use these only to recognise plausible answers and to ask sharper follow-ups.",
+    "standoff_energised_lines": "about 3 to 9 m (10 to 30 ft) minimum for close work, set by utility protocol; magnetic fields above about 180 microtesla made test UAVs drift towards the line",
+    "corridor_flight": "fly above or beside the line, not between conductors; some guides keep 30 to 45 m horizontal and 15 m vertical for general flight",
+    "insulator_views": "about three viewpoints per insulator string: the attachment point at each end and the string itself; each tower head also needs a view of the shield wire attachment",
+    "defect_priority": "one utility scale: priority 1 = immediate action, priority 2 = within 12 months (6 in high fire-risk areas), priority 3 = within 60 months",
+    "road_crossing": "no sustained flight over moving vehicles; the pilot chooses a safe way to cross an active road",
+    "typical_defects": "broken or flashed-over insulators, pollution on insulators, broken conductor strands, hot connections and splices, corrosion and missing bolts on towers, loose or missing vibration dampers and spacers, bird nests and foreign objects, vegetation encroachment, tower lean or bent members"
+  },
+  "sources": [
+    "https://www.vastarrive.com/top-10-transmission-line-inspection-problems-drones-can-identify",
+    "https://averroes.ai/blog/transmission-line-inspection",
+    "https://dronelaunchacademy.com/resources/drone-power-line-inspection/",
+    "https://www.thedroneu.com/blog/how-to-use-drones-for-powerline-inspections/",
+    "https://www.mdpi.com/2504-446X/8/2/47",
+    "https://onlinelibrary.wiley.com/doi/10.1155/2021/8894055",
+    "https://www.pge.com/assets/pge/docs/outages-and-safety/outage-preparedness-and-support/td-1001m-etpmm.pdf",
+    "https://pilotinstitute.com/drone-moving-vehicles/"
+  ]
+}

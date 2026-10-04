@@ -34,8 +34,6 @@
 - **[Takeoff / Initial Approach – Insulator i1 area]**: After takeoff, the pilot climbed above working altitude before descending (observed around t≈8.2s) to get an overview of the target object and its surroundings. The stated reason was to see and analyze the object in context before descending to inspection height.
 - **[Conductor / Mid-span Cable Segment, t≈61s]**: When the pilot suspects ice or a frozen deposit on a cable, they descend to just below the cable (≈1.7 m horizontal, ≈0.4 m below) and circle around it at low speed to inspect it up close. The reason is to visually check the suspected ice accumulation from multiple angles.
 - **[Insulator i1 / Close Inspection Positioning]**: When inspecting insulator i1 (t≈23.1s, ~5.9 m standoff), the pilot preferred holding a stable hover offset in height from the cable rather than approaching level with the conductor, because it is easier to position and gives a view of the underside of the insulator.
-- *[t=60.1s]* **Maneuver Insight**: sfsd
-- *[t=31.0s]* **Maneuver Insight**: inspecting the quality of the air
 - *[t=112.9s]* **Maneuver Insight**: I was going around the cable to see if it was fine on the other side too !
 - *[t=70.0s]* **Maneuver Insight**: Because the road was there and IM not allowed to cross the road
 - *[t=46.2s]* **Maneuver Insight**: I was checking the cable for analysis of the state of it. To make sure it wasn't broken!
@@ -43,3 +41,8 @@
 - *[t=0.0s]* **Pylon 2 Hover Insight**: I noticed intense wind drafts between towers so I lowered speed to 0.4m/s to stabilize.
 - *[Benchmark Flight]*: Initial baseline established for Pylons 1, 2, and 3 spans.
 
+## 5. Expert Competence Grid
+Knowledge: 1/29 slots filled, 0 confirmed in later flights.
+
+### Approach to a pylon
+- **Tower check** (heard once): When checking the tower, look for bird nests and pay particular attention to any nest built close to the electric line, because a nest near the conductor is a concern.

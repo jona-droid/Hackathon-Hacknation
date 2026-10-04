@@ -26,10 +26,18 @@ export type SimState = {
   inspected_count: number;
   violations?: Array<{ text: string }>;
   session_active?: boolean;
+  task?: string | null; // competence-grid task the pilot is doing
+  task_name?: string | null;
+  knowledge?: KnowledgeCoverage;
 };
+
+export type KnowledgeCoverage = { filled: number; confirmed: number; total: number };
 
 export type AIQuestion = {
   question: string;
+  slot?: string | null; // competence-grid slot the question tries to fill
+  slot_name?: string | null;
+  kind?: "observer" | "deviation" | "follow_up";
   event: SimEvent;
   telemetry: Partial<SimState>;
   t: number;

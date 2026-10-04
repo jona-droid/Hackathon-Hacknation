@@ -14,6 +14,8 @@ from typing import Any
 
 import numpy as np
 
+from backend.sim.tasks import Episode, TaskTracker
+
 # Columns kept per sample; the window table sent to the LLM uses the same order.
 COLUMNS = (
     "t", "x", "y", "z", "speed", "vz", "acc", "heading_deg",
@@ -37,6 +39,7 @@ class FlightLog:
     insulators: list[str] = field(default_factory=list)  # nearest insulator per row
     events: list[dict[str, Any]] = field(default_factory=list)
     conditions: dict[str, Any] = field(default_factory=dict)
+    tasks: TaskTracker = field(default_factory=TaskTracker)
     _last_t: float = -1e9
 
     def reset(self) -> None:
@@ -44,6 +47,7 @@ class FlightLog:
         self.insulators.clear()
         self.events.clear()
         self.conditions = {}
+        self.tasks.reset()
         self._last_t = -1e9
 
     def record(self, state: dict[str, Any]) -> None:
@@ -67,9 +71,27 @@ class FlightLog:
             "position_hold": state["position_hold"],
         }
         self.insulators.append(state["nearest_insulator"])
+        self.tasks.update(len(self.rows) - 1, t, state, self.rows, COLUMNS, self.insulators)
 
     def record_event(self, event: dict[str, Any]) -> None:
         self.events.append(event)
+        self.tasks.on_event(event)
+
+    def current_episode(self) -> Episode | None:
+        return self.tasks.current_episode(self.rows, COLUMNS, self.insulators)
+
+    def latest_episode(self, task: str) -> Episode | None:
+        """The ongoing episode of `task`, else the last finished one."""
+        cur = self.current_episode()
+        return cur if cur and cur.task == task else self.tasks.last_episode(task)
+
+    def find_episode(self, task: str, start: float) -> Episode | None:
+        """The episode a question was asked about, with all its samples so far."""
+        cur = self.current_episode()
+        if cur and cur.task == task and cur.start == start:
+            return cur
+        found = next((ep for ep in reversed(self.tasks.finished) if ep.task == task and ep.start == start), None)
+        return found or self.latest_episode(task)
 
     @property
     def duration(self) -> float:
