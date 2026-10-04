@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.core.config import SESSIONS_DIR
 from backend.llm.client import LLMClient
+from backend.sim.scene import Scene
 from backend.storage.session_recorder import load_jsonl
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "summarizer.txt"
@@ -56,7 +57,7 @@ def _compute_metrics(session_id: str) -> dict[str, Any]:
             violations.append(f"Cable proximity < 1.5m at t={r.get('t', 0.0):.1f}s")
             break
 
-    total_insulators = 6
+    total_insulators = len(Scene().insulators)
     coverage_pct = round((len(inspected_set) / max(1, total_insulators)) * 100, 1)
 
     return {
